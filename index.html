@@ -248,28 +248,46 @@
 
   // ====== INIT UI ======
   (function initUI(){
-    const sel = el('location');
-    Object.keys(LOCATIONS).forEach(name=>{
-      const o=document.createElement('option'); o.value=name; o.textContent=name; sel.appendChild(o);
-    });
-    sel.value = load('plfc.loc', DEFAULT_LOC);
-    el('worldtidesKey').value = load('plfc.worldtides','');
-    el('refreshMins').value = (load('plfc.refresh', REFRESH_MS)/60000)|0;
-    el('refresh-interval').textContent = ((load('plfc.refresh', REFRESH_MS)/60000)|0);
-    sel.addEventListener('change', ()=>{ save('plfc.loc', sel.value); updateAll(); recenterMyMaps(); });
-    el('saveKey').addEventListener('click', ()=>{ save('plfc.worldtides', el('worldtidesKey').value.trim()); updateTides(); });
-    el('applyRefresh').addEventListener('click', ()=>{
-      const mins = clamp(parseInt(el('refreshMins').value||'15',10),1,60);
-      REFRESH_MS = mins*60*1000; save('plfc.refresh', REFRESH_MS);
-      el('refresh-interval').textContent = mins; scheduleAutoRefresh();
-    });
-    el('refreshBtn').addEventListener('click', ()=>updateAll());
-    document.querySelectorAll('[data-map-layer]').forEach(btn=>btn.addEventListener('click',()=>{
-      const layer = btn.dataset.mapLayer; centerToLayer(layer);
-    }));
+    try{
+      const sel = el('location');
+      // Populate options fresh each load
+      sel.innerHTML = '';
+      Object.keys(LOCATIONS).forEach(name=>{
+        const o=document.createElement('option'); o.value=name; o.textContent=name; sel.appendChild(o);
+      });
+      // Restore saved location, or default if missing
+      const saved = load('plfc.loc', DEFAULT_LOC);
+      sel.value = LOCATIONS[saved] ? saved : DEFAULT_LOC;
+
+      // Restore other controls with safe parsing
+      const savedRefresh = Number(load('plfc.refresh', REFRESH_MS)) || REFRESH_MS;
+      el('worldtidesKey').value = load('plfc.worldtides','');
+      el('refreshMins').value = Math.max(1, Math.min(60, Math.round(savedRefresh/60000)));
+      el('refresh-interval').textContent = Math.round(savedRefresh/60000);
+      REFRESH_MS = savedRefresh;
+
+      sel.addEventListener('change', ()=>{ save('plfc.loc', sel.value); updateAll(); recenterMyMaps(); });
+      el('saveKey').addEventListener('click', ()=>{ save('plfc.worldtides', el('worldtidesKey').value.trim()); updateTides(); });
+      el('applyRefresh').addEventListener('click', ()=>{
+        const mins = clamp(parseInt(el('refreshMins').value||'15',10),1,60);
+        REFRESH_MS = mins*60*1000; save('plfc.refresh', REFRESH_MS);
+        el('refresh-interval').textContent = mins; scheduleAutoRefresh();
+      });
+      el('refreshBtn').addEventListener('click', ()=>updateAll());
+      document.querySelectorAll('[data-map-layer]').forEach(btn=>btn.addEventListener('click',()=>{
+        const layer = btn.dataset.mapLayer; centerToLayer(layer);
+      }));
+    }catch(err){
+      console.error('UI init failed', err);
+      // fail-safe defaults so the rest of the app still works
+      try{ el('location').value = DEFAULT_LOC; }catch{}
+    }
   })();
 
-  function currentLoc(){ return LOCATIONS[el('location').value] }
+  function currentLoc(){
+    const name = (el('location')?.value) || DEFAULT_LOC;
+    return LOCATIONS[name] || LOCATIONS[DEFAULT_LOC];
+  }
   function updateNow(){ el('now-local').textContent = new Date().toLocaleString(); }
 
   // ====== GOOGLE MY MAPS ======
