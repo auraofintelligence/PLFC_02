@@ -278,12 +278,15 @@ async function fetchJSON(url){
 
 async function getSolunar(lat,lon,dateISO){
   const base = `https://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
-  return fetchJSON(base);
+  // Some browsers block this API due to CORS. If it fails, we gracefully degrade.
+  try{ return await fetchJSON(base); }
+  catch(e){ console.warn('Solunar failed (likely CORS). Falling back to basic astronomy via Open‑Meteo.', e); return null; }
 }
 
 async function getWeather(lat,lon){
   const url = new URL('https://api.open-meteo.com/v1/forecast');
-  url.search = new URLSearchParams({ latitude:lat, longitude:lon, timezone: TZ,
+  const tz = TZ || 'auto';
+  url.search = new URLSearchParams({ latitude:lat, longitude:lon, timezone: tz,
     temperature_unit:'celsius', wind_speed_unit:'kmh', precipitation_unit:'mm',
     hourly: [
       'temperature_2m','wind_speed_10m','wind_gusts_10m','wind_direction_10m',
@@ -296,9 +299,17 @@ async function getWeather(lat,lon){
   return fetchJSON(url);
 }
 
+function offshore(lat,lon,km=2,bearingDeg=90){
+  const R=6371; const br=bearingDeg*Math.PI/180; const d=km/R; const la=lat*Math.PI/180; const lo=lon*Math.PI/180;
+  const la2 = Math.asin(Math.sin(la)*Math.cos(d)+Math.cos(la)*Math.sin(d)*Math.cos(br));
+  const lo2 = lo + Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(la), Math.cos(d)-Math.sin(la)*Math.sin(la2));
+  return { lat: la2*180/Math.PI, lon: ((lo2*180/Math.PI+540)%360)-180 };
+}
 async function getMarine(lat,lon){
+  // Nudge point ~2 km offshore to avoid land cells returning empty arrays
+  const sea = offshore(lat,lon,2,100);
   const url = new URL('https://marine-api.open-meteo.com/v1/marine');
-  url.search = new URLSearchParams({ latitude:lat, longitude:lon, timezone: TZ,
+  url.search = new URLSearchParams({ latitude:sea.lat, longitude:sea.lon, timezone: TZ || 'auto',
     hourly: [
       'wave_height','wave_direction','wave_period',
       'wind_wave_height','wind_wave_direction','wind_wave_period',
@@ -470,32 +481,54 @@ async function updateAll(){
   updateNow();
   const {lat,lon} = currentLoc();
   el('locName').textContent = el('location').value; el('locCoords').textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}  (${TZ})`;
-  try{
-    const [sol, wx, mar] = await Promise.all([
-      getSolunar(lat,lon,toISODate(new Date())),
-      getWeather(lat,lon),
-      getMarine(lat,lon)
-    ]);
-    // adapt solunar response into our renderer shape
-    renderSolunar({
-      major1Start: sol.major1Start? new Date(`${sol.date} ${sol.major1Start}`):null,
-      major1End:   sol.major1Stop?  new Date(`${sol.date} ${sol.major1Stop}`):null,
-      major2Start: sol.major2Start? new Date(`${sol.date} ${sol.major2Start}`):null,
-      major2End:   sol.major2Stop?  new Date(`${sol.date} ${sol.major2Stop}`):null,
-      minor1Start: sol.minor1Start? new Date(`${sol.date} ${sol.minor1Start}`):null,
-      minor1End:   sol.minor1Stop?  new Date(`${sol.date} ${sol.minor1Stop}`):null,
-      minor2Start: sol.minor2Start? new Date(`${sol.date} ${sol.minor2Start}`):null,
-      minor2End:   sol.minor2Stop?  new Date(`${sol.date} ${sol.minor2Stop}`):null,
-      sunRise: sol.sunRise? new Date(`${sol.date} ${sol.sunRise}`):null,
-      sunSet:  sol.sunSet?  new Date(`${sol.date} ${sol.sunSet}`):null,
-      moonIllumination: (sol.moonIllumination ?? sol.moonPhasePct)/100,
-      moonPhaseIndex: sol.moonPhaseIndex,
-      moonPhase: sol.moonPhase,
-      dayRating: sol.dayRating? `${sol.dayRating}/4` : ''
-    });
-    renderWeather(wx);
-    renderMarine(mar);
-  }catch(e){ console.error(e); alert('Failed to fetch weather/solunar/marine. Try refresh.'); }
+
+  const results = await Promise.allSettled([
+    getSolunar(lat,lon,toISODate(new Date())),
+    getWeather(lat,lon),
+    getMarine(lat,lon)
+  ]);
+
+  const [solRes, wxRes, marRes] = results;
+  if(wxRes.status==='fulfilled'){
+    try{ renderWeather(wxRes.value); }catch(err){ console.error('Render weather failed', err); }
+  } else { console.error('Weather fetch failed', wxRes.reason); }
+
+  if(marRes.status==='fulfilled'){
+    try{ renderMarine(marRes.value); }catch(err){ console.error('Render marine failed', err); }
+  } else { console.error('Marine fetch failed', marRes.reason); }
+
+  if(solRes.status==='fulfilled' && solRes.value){
+    try{
+      const sol = solRes.value;
+      renderSolunar({
+        major1Start: sol.major1Start? new Date(`${sol.date} ${sol.major1Start}`):null,
+        major1End:   sol.major1Stop?  new Date(`${sol.date} ${sol.major1Stop}`):null,
+        major2Start: sol.major2Start? new Date(`${sol.date} ${sol.major2Start}`):null,
+        major2End:   sol.major2Stop?  new Date(`${sol.date} ${sol.major2Stop}`):null,
+        minor1Start: sol.minor1Start? new Date(`${sol.date} ${sol.minor1Start}`):null,
+        minor1End:   sol.minor1Stop?  new Date(`${sol.date} ${sol.minor1Stop}`):null,
+        minor2Start: sol.minor2Start? new Date(`${sol.date} ${sol.minor2Start}`):null,
+        minor2End:   sol.minor2Stop?  new Date(`${sol.date} ${sol.minor2Stop}`):null,
+        sunRise: sol.sunRise? new Date(`${sol.date} ${sol.sunRise}`):null,
+        sunSet:  sol.sunSet?  new Date(`${sol.date} ${sol.sunSet}`):null,
+        moonIllumination: (sol.moonIllumination ?? sol.moonPhasePct)/100,
+        moonPhaseIndex: sol.moonPhaseIndex,
+        moonPhase: sol.moonPhase,
+        dayRating: sol.dayRating? `${sol.dayRating}/4` : ''
+      });
+    }catch(err){ console.warn('Solunar render failed', err); }
+  } else {
+    // Minimal fallback using Open‑Meteo daily
+    try{
+      const d = wxRes.status==='fulfilled' ? wxRes.value.daily : null;
+      if(d){
+        el('sunrise').textContent = d.sunrise?.[0] ? fmtTime(d.sunrise[0]) : '—';
+        el('sunset').textContent  = d.sunset?.[0] ? fmtTime(d.sunset[0]) : '—';
+        el('moon-phase-pill').textContent = '—';
+        el('solunar-note').textContent = 'Solunar API unavailable; showing sunrise/sunset only.';
+      }
+    }catch{}
+  }
 
   updateTides();
   recenterMyMaps();
