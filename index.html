@@ -210,426 +210,295 @@
 
   <!-- App JS (separate tag so the Chart.js loader above can truly defer) -->
   <script>
-  // ====== HELPERS & PARSERS ======
-  function parseSolunarTime(dateISO, t){
-    if(!t) return null;
-    t = String(t).trim().toLowerCase();
-    const parts = t.split(' ').filter(Boolean);
-    const hm = parts[0] || t; const ap = parts[1] || '';
-    const bits = hm.split(':');
-    if(bits.length<2) return null;
-    let h = parseInt(bits[0],10); let m = parseInt(bits[1],10);
-    if(Number.isNaN(h) || Number.isNaN(m)) return null;
-    if(ap==='pm' && h<12) h+=12; if(ap==='am' && h===12) h=0;
-    const d = new Date(`${dateISO}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`);
-    return Number.isNaN(d.getTime()) ? null : d;
+// ====== HELPERS & PARSERS ======
+function parseSolunarTime(dateISO,t){
+  if(!t) return null;
+  t=String(t).trim().toLowerCase();
+  const [hm,ap='']=t.split(/\s+/);
+  const [hh,mm]=hm.split(':'); if(!hh||!mm) return null;
+  let h=+hh,m=+mm; if(Number.isNaN(h)||Number.isNaN(m)) return null;
+  if(ap==='pm'&&h<12) h+=12; if(ap==='am'&&h===12) h=0;
+  const d=new Date(`${dateISO}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`);
+  return Number.isNaN(d.getTime())?null:d;
+}
+
+// ====== CONFIG ======
+const LOCATIONS={
+  "Point Lookout":{lat:-27.4310,lon:153.5347,layer:"point-lookout"},
+  "Amity Point":  {lat:-27.4019,lon:153.4393,layer:"amity"},
+  "Dunwich":      {lat:-27.4993,lon:153.4011,layer:"dunwich"},
+  "Jumpinpin":    {lat:-27.7340,lon:153.4480,layer:"jumpinpin"}
+};
+const DEFAULT_LOC="Point Lookout";
+const TZ=Intl.DateTimeFormat().resolvedOptions().timeZone||"Australia/Brisbane";
+let REFRESH_MS=15*60*1000;
+
+// ====== UTIL ======
+const el=(id)=>document.getElementById(id);
+const fmtTime=(d)=>new Date(d).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+const fmtDateTime=(d)=>new Date(d).toLocaleString([], {hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"});
+const toISODate=(d)=>new Date(d).toISOString().slice(0,10);
+const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
+const load=(k,fb)=>{try{return JSON.parse(localStorage.getItem(k))??fb;}catch{return fb;}};
+
+// ====== INIT UI ======
+(function initUI(){
+  try{
+    const sel=el('location'); sel.innerHTML='';
+    Object.keys(LOCATIONS).forEach(name=>{const o=document.createElement('option');o.value=name;o.textContent=name;sel.appendChild(o);});
+    const saved=load('plfc.loc',DEFAULT_LOC); sel.value=LOCATIONS[saved]?saved:DEFAULT_LOC;
+
+    const savedRefresh=Number(load('plfc.refresh',REFRESH_MS))||REFRESH_MS;
+    el('worldtidesKey').value=load('plfc.worldtides','');
+    el('refreshMins').value=Math.max(1,Math.min(60,Math.round(savedRefresh/60000)));
+    el('refresh-interval').textContent=Math.round(savedRefresh/60000);
+    REFRESH_MS=savedRefresh;
+
+    sel.addEventListener('change',()=>{save('plfc.loc',sel.value); updateAll(); recenterMyMaps();});
+    el('saveKey').addEventListener('click',()=>{save('plfc.worldtides',el('worldtidesKey').value.trim()); updateTides();});
+    el('applyRefresh').addEventListener('click',()=>{
+      const mins=clamp(parseInt(el('refreshMins').value||'15',10),1,60);
+      REFRESH_MS=mins*60*1000; save('plfc.refresh',REFRESH_MS);
+      el('refresh-interval').textContent=mins; scheduleAutoRefresh();
+    });
+    el('refreshBtn').addEventListener('click',()=>updateAll());
+    document.querySelectorAll('[data-map-layer]').forEach(btn=>btn.addEventListener('click',()=>centerToLayer(btn.dataset.mapLayer)));
+  }catch(err){ console.error('UI init failed',err); try{el('location').value=DEFAULT_LOC;}catch{} }
+})();
+function currentLoc(){ const name=(el('location')?.value)||DEFAULT_LOC; return LOCATIONS[name]||LOCATIONS[DEFAULT_LOC]; }
+function updateNow(){ el('now-local').textContent=new Date().toLocaleString(); }
+
+// ====== GOOGLE MY MAPS ======
+function recenterMyMaps(){
+  const {lat,lon}=currentLoc();
+  const url=new URL(el('mymaps').src);
+  url.searchParams.set('ll',`${lat.toFixed(5)},${lon.toFixed(5)}`);
+  url.searchParams.set('z','12');
+  el('mymaps').src=url.toString();
+}
+function centerToLayer(layer){
+  if(layer==='all'){ el('mymaps').src=el('mymaps').src; return; }
+  const entry=Object.entries(LOCATIONS).find(([,v])=>v.layer===layer);
+  if(entry){ el('location').value=entry[0]; save('plfc.loc',entry[0]); recenterMyMaps(); updateAll(); }
+}
+
+// ====== FETCHERS ======
+async function fetchJSON(url){ const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
+
+async function getSolunar(lat,lon,dateISO){
+  const base=`https://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
+  try{ return await fetchJSON(base); }
+  catch(e1){
+    // CORS-safe text proxy
+    try{
+      const prox=`https://r.jina.ai/http://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
+      const r=await fetch(prox); return JSON.parse(await r.text());
+    }catch(e2){ console.warn('Solunar failed',e1,e2); return null; }
+  }
+}
+
+async function getWeather(lat,lon){
+  const url=new URL('https://api.open-meteo.com/v1/forecast');
+  url.search=new URLSearchParams({
+    latitude:lat, longitude:lon, timezone:TZ||'auto',
+    temperature_unit:'celsius', wind_speed_unit:'kmh', precipitation_unit:'mm',
+    hourly:['temperature_2m','wind_speed_10m','wind_gusts_10m','wind_direction_10m','relative_humidity_2m','precipitation_probability'].join(','),
+    daily:['sunrise','sunset','uv_index_max','moon_phase'].join(','),
+    minutely_15:'precipitation'
+  }).toString();
+  return fetchJSON(url);
+}
+
+function offshore(lat,lon,km=2,bearingDeg=100){
+  const R=6371, br=bearingDeg*Math.PI/180, d=km/R, la=lat*Math.PI/180, lo=lon*Math.PI/180;
+  const la2=Math.asin(Math.sin(la)*Math.cos(d)+Math.cos(la)*Math.sin(d)*Math.cos(br));
+  const lo2=lo+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(la),Math.cos(d)-Math.sin(la)*Math.sin(la2));
+  return {lat:la2*180/Math.PI, lon:((lo2*180/Math.PI+540)%360)-180};
+}
+async function getMarine(lat,lon){
+  const sea=offshore(lat,lon,2,100);
+  const url=new URL('https://marine-api.open-meteo.com/v1/marine');
+  url.search=new URLSearchParams({
+    latitude:sea.lat, longitude:sea.lon, timezone:TZ||'auto',
+    hourly:['wave_height','wave_direction','wave_period','wind_wave_height','wind_wave_direction','wind_wave_period','swell_wave_height','swell_wave_direction','swell_wave_period'].join(',')
+  }).toString();
+  return fetchJSON(url);
+}
+
+async function getTides(lat,lon){
+  const key=el('worldtidesKey').value.trim();
+  if(!key){ el('updated-tides').textContent='Add API key to show tides'; return {extremes:[]}; }
+  const url=new URL('https://www.worldtides.info/api');
+  url.search=new URLSearchParams({extremes:'',lat,lon,key,length:48*3600}).toString();
+  const data=await fetchJSON(url);
+  el('updated-tides').textContent='Updated '+new Date(data.creationDate||Date.now()).toLocaleString();
+  return data;
+}
+
+// ====== RENDER ======
+let wxChart,waveChart,precipChart,waveBreakChart;
+function destroyCharts(){
+  try{wxChart?.destroy()}catch{} wxChart=null;
+  try{waveChart?.destroy()}catch{} waveChart=null;
+  try{precipChart?.destroy()}catch{} precipChart=null;
+  try{waveBreakChart?.destroy()}catch{} waveBreakChart=null;
+}
+function phaseName(idx){
+  if(typeof idx==='string') return idx;
+  const names=['New','Waxing Crescent','First Quarter','Waxing Gibbous','Full','Waning Gibbous','Last Quarter','Waning Crescent'];
+  return names[clamp(Math.round(idx||0),0,7)]||'—';
+}
+function fillFromWeatherDaily(daily){
+  if(!daily) return;
+  if(daily.sunrise?.[0]) el('sunrise').textContent=fmtTime(daily.sunrise[0]);
+  if(daily.sunset?.[0])  el('sunset').textContent=fmtTime(daily.sunset[0]);
+  if(typeof daily.moon_phase?.[0]==='number'){
+    const phase=daily.moon_phase[0];
+    const illum=0.5*(1-Math.cos(2*Math.PI*phase));
+    el('moon-illum').textContent=Math.round(illum*100)+'%';
+    el('moon-phase-pill').textContent=phaseName(Math.round((phase%1)*8));
+  }
+}
+function renderSolunar(data){
+  const show=(id,start,end)=>{ const x=el(id); x.textContent=(start&&end)?`${fmtTime(start)} – ${fmtTime(end)}`:'—'; };
+  show('major-1',data.major1Start,data.major1End);
+  show('major-2',data.major2Start,data.major2End);
+  show('minor-1',data.minor1Start,data.minor1End);
+  show('minor-2',data.minor2Start,data.minor2End);
+  el('sunrise').textContent=data.sunRise?fmtTime(data.sunRise):el('sunrise').textContent||'—';
+  el('sunset').textContent =data.sunSet ?fmtTime(data.sunSet) :el('sunset').textContent||'—';
+  const illum=(data.moonIllumination||0)*100;
+  el('moon-illum').textContent=isFinite(illum)?illum.toFixed(0)+'%':'—';
+  el('moon-phase-pill').textContent=phaseName(data.moonPhaseIndex??data.moonPhase);
+  el('solunar-note').textContent=`Solunar: ${data.dayRating||''} • Moon: ${phaseName(data.moonPhaseIndex??data.moonPhase)} (${(illum||0).toFixed(0)}% illuminated)`;
+}
+function renderWeather(data){
+  if(!data?.hourly?.time?.length) return;
+  const {hourly,daily,minutely_15}=data;
+  el('updated-weather').textContent='Updated '+new Date().toLocaleTimeString();
+
+  // table
+  const tbody=el('wxTable').querySelector('tbody'); tbody.innerHTML='';
+  const rows=hourly.time.map((t,i)=>({t,temp:hourly.temperature_2m[i],wind:hourly.wind_speed_10m[i],gust:hourly.wind_gusts_10m[i],dir:hourly.wind_direction_10m?.[i],rh:hourly.relative_humidity_2m?.[i],pop:hourly.precipitation_probability?.[i]}));
+  rows.slice(0,12).forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${fmtTime(r.t)}</td><td>${r.temp?.toFixed?.(1)}</td><td>${r.wind?.toFixed?.(0)}</td><td>${r.gust?.toFixed?.(0)}</td><td>${r.dir??'—'}</td><td>${r.rh??'—'}</td><td>${r.pop??'—'}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  // charts
+  destroyCharts();
+  const labels=rows.slice(0,24).map(r=>new Date(r.t).toLocaleTimeString([], {hour:'2-digit'}));
+  wxChart=new Chart(document.getElementById('wxChart'),{
+    type:'line', data:{labels,datasets:[{label:'Temp °C',data:rows.slice(0,24).map(r=>r.temp),yAxisID:'y'},{label:'Wind km/h',data:rows.slice(0,24).map(r=>r.wind),yAxisID:'y1'}]},
+    options:{responsive:true,maintainAspectRatio:false,scales:{y:{title:{display:true,text:'°C'}},y1:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'km/h'}}}}
+  });
+
+  const pTimes=minutely_15?.time||[], pVals=minutely_15?.precipitation||[];
+  if(pTimes.length){
+    precipChart=new Chart(document.getElementById('precip15Chart'),{
+      type:'bar', data:{labels:pTimes.slice(0,8).map(t=>new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})), datasets:[{label:'Precip mm (15 min)', data:pVals.slice(0,8)}]},
+      options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}
+    });
+    el('updated-precip').textContent='Updated '+new Date().toLocaleTimeString();
   }
 
-  // ====== CONFIG ======
-  const LOCATIONS = {
-    "Point Lookout": { lat: -27.4310, lon: 153.5347, layer:"point-lookout" },
-    "Amity Point":   { lat: -27.4019, lon: 153.4393, layer:"amity" },
-    "Dunwich":       { lat: -27.4993, lon: 153.4011, layer:"dunwich" },
-    "Jumpinpin":     { lat: -27.7340, lon: 153.4480, layer:"jumpinpin" }
+  // quick read
+  const nowT=rows[0]?.temp, nowW=rows[0]?.wind;
+  const bft=beaufortFromKmh(nowW||0);
+  el('quickRead').textContent=`Temp ${Number(nowT).toFixed(1)}°C • Wind ${Number(nowW).toFixed(0)} km/h (Bft ${bft.scale}: ${bft.name}) • UV max ${daily.uv_index_max?.[0] ?? '—'}`;
+}
+function beaufortFromKmh(kmh){
+  const b=[1,5,11,19,28,38,49,61,74,88,102,117,1000];
+  const n=['Calm','Light air','Light breeze','Gentle breeze','Moderate','Fresh','Strong','Near gale','Gale','Strong gale','Storm','Violent storm','Hurricane'];
+  let i=b.findIndex(x=>kmh<=x); if(i<0) i=b.length-1; return {scale:i,name:n[i]};
+}
+function renderMarine(data){
+  if(!data?.hourly?.time?.length) return;
+  const {hourly}=data;
+  el('updated-marine').textContent='Updated '+new Date().toLocaleTimeString();
+
+  const tbody=el('marineTable').querySelector('tbody'); tbody.innerHTML='';
+  const rows=hourly.time.map((t,i)=>({t,hs:hourly.wave_height[i],tp:hourly.wave_period[i],dir:hourly.wave_direction[i],wh:hourly.wind_wave_height?.[i],wt:hourly.wind_wave_period?.[i],wd:hourly.wind_wave_direction?.[i],sh:hourly.swell_wave_height?.[i],st:hourly.swell_wave_period?.[i],sd:hourly.swell_wave_direction?.[i]}));
+  rows.slice(0,12).forEach(r=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${fmtTime(r.t)}</td><td>${r.hs?.toFixed?.(2)}</td><td>${r.tp?.toFixed?.(1)}</td><td>${r.dir?.toFixed?.(0)}</td>`; tbody.appendChild(tr);});
+
+  if(waveChart){try{waveChart.destroy()}catch{}}
+  const labels=rows.slice(0,24).map(r=>new Date(r.t).toLocaleTimeString([], {hour:'2-digit'}));
+  waveChart=new Chart(document.getElementById('waveChart'),{
+    type:'line', data:{labels,datasets:[{label:'Hs m',data:rows.slice(0,24).map(r=>r.hs),yAxisID:'y'},{label:'Period s',data:rows.slice(0,24).map(r=>r.tp),yAxisID:'y1'}]},
+    options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,title:{display:true,text:'m'}},y1:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'s'}}}}
+  });
+
+  if(waveBreakChart){try{waveBreakChart.destroy()}catch{}}
+  waveBreakChart=new Chart(document.getElementById('waveBreakChart'),{
+    type:'line', data:{labels,datasets:[{label:'Swell m',data:rows.slice(0,24).map(r=>r.sh)},{label:'Wind-wave m',data:rows.slice(0,24).map(r=>r.wh)}]},
+    options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,title:{display:true,text:'m'}}}}
+  });
+
+  const br=document.querySelector('#marineBreakTable tbody'); br.innerHTML='';
+  rows.slice(0,12).forEach(r=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${fmtTime(r.t)}</td><td>${r.sh??'—'}</td><td>${r.st??'—'}</td><td>${r.wh??'—'}</td><td>${r.wt??'—'}</td>`; br.appendChild(tr);});
+}
+function renderTides(data){
+  const tbody=el('tideTable').querySelector('tbody'); tbody.innerHTML='';
+  (data.extremes||[]).forEach(x=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${fmtDateTime(x.dt*1000)}</td><td>${x.type}</td><td>${(x.height??0).toFixed(2)}</td>`; tbody.appendChild(tr);});
+}
+
+// ====== ORCHESTRATION ======
+async function updateAll(){
+  updateNow();
+  const {lat,lon}=currentLoc();
+  el('locName').textContent=el('location').value; el('locCoords').textContent=`${lat.toFixed(4)}, ${lon.toFixed(4)}  (${TZ})`;
+
+  const results=await Promise.allSettled([ getSolunar(lat,lon,toISODate(new Date())), getWeather(lat,lon), getMarine(lat,lon) ]);
+  const [solRes,wxRes,marRes]=results;
+
+  if(wxRes.status==='fulfilled'){ try{renderWeather(wxRes.value);}catch(e){console.error('Render weather failed',e);} }
+  else { console.error('Weather fetch failed',wxRes.reason); }
+
+  if(marRes.status==='fulfilled'){ try{renderMarine(marRes.value);}catch(e){console.error('Render marine failed',e);} }
+  else { console.error('Marine fetch failed',marRes.reason); }
+
+  if(solRes.status==='fulfilled'&&solRes.value){
+    try{
+      const sol=solRes.value||{}; const dISO=toISODate(new Date());
+      const payload={
+        major1Start:parseSolunarTime(dISO,sol.major1Start), major1End:parseSolunarTime(dISO,sol.major1Stop),
+        major2Start:parseSolunarTime(dISO,sol.major2Start), major2End:parseSolunarTime(dISO,sol.major2Stop),
+        minor1Start:parseSolunarTime(dISO,sol.minor1Start), minor1End:parseSolunarTime(dISO,sol.minor1Stop),
+        minor2Start:parseSolunarTime(dISO,sol.minor2Start), minor2End:parseSolunarTime(dISO,sol.minor2Stop),
+        sunRise:parseSolunarTime(dISO,sol.sunRise), sunSet:parseSolunarTime(dISO,sol.sunSet),
+        moonIllumination:(sol.moonIllumination??sol.moonPhasePct)/100,
+        moonPhaseIndex:sol.moonPhaseIndex, moonPhase:sol.moonPhase, dayRating:sol.dayRating?`${sol.dayRating}/4`:''
+      };
+      if(wxRes.status==='fulfilled'){ const wxDaily=wxRes.value.daily; if(!payload.sunRise||!payload.sunSet||!isFinite(payload.moonIllumination)) fillFromWeatherDaily(wxDaily); }
+      renderSolunar(payload);
+    }catch(e){ console.warn('Solunar render failed',e); }
+  }else{
+    try{ const d=wxRes.status==='fulfilled'?wxRes.value.daily:null; fillFromWeatherDaily(d); el('solunar-note').textContent='Solunar API unavailable; showing sunrise/sunset from weather.'; }catch{}
+  }
+
+  // Diagnostics
+  const diag=[];
+  const line=(name,res)=>{ if(!res) return diag.push(`${name}: no result`);
+    if(res.status!=='fulfilled') return diag.push(`${name}: FAIL → ${String(res.reason)}`);
+    return diag.push(`${name}: ok (bytes ~${JSON.stringify(res.value).length})`);
   };
-  const DEFAULT_LOC = "Point Lookout";
-  const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "Australia/Brisbane";
-  let REFRESH_MS = 15*60*1000; // 15 min
+  line('Weather',wxRes); line('Marine',marRes); line('Solunar',solRes);
+  console.log('[PLFC diag]',diag.join(' • '));
 
-  // ====== UTIL ======
-  const el = (id)=>document.getElementById(id);
-  const fmtTime = (d)=> new Date(d).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
-  const fmtDateTime = (d)=> new Date(d).toLocaleString([], {hour:"2-digit", minute:"2-digit", day:"2-digit", month:"short"});
-  const toISODate = (d)=> new Date(d).toISOString().slice(0,10);
-  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+  updateTides();
+  recenterMyMaps();
+}
 
-  function save(key,val){localStorage.setItem(key, JSON.stringify(val));}
-  function load(key,fb){try{return JSON.parse(localStorage.getItem(key)) ?? fb;}catch{ return fb;}}
+async function updateTides(){ try{ const {lat,lon}=currentLoc(); renderTides(await getTides(lat,lon)); }catch(e){ console.warn('Tides unavailable',e); } }
 
-  // ====== INIT UI ======
-  (function initUI(){
-    try{
-      const sel = el('location');
-      // Populate options fresh each load
-      sel.innerHTML = '';
-      Object.keys(LOCATIONS).forEach(name=>{
-        const o=document.createElement('option'); o.value=name; o.textContent=name; sel.appendChild(o);
-      });
-      // Restore saved location, or default if missing
-      const saved = load('plfc.loc', DEFAULT_LOC);
-      sel.value = LOCATIONS[saved] ? saved : DEFAULT_LOC;
+let refreshTimer;
+function scheduleAutoRefresh(){ if(refreshTimer) clearInterval(refreshTimer); refreshTimer=setInterval(updateAll, load('plfc.refresh',REFRESH_MS)); }
 
-      // Restore other controls with safe parsing
-      const savedRefresh = Number(load('plfc.refresh', REFRESH_MS)) || REFRESH_MS;
-      el('worldtidesKey').value = load('plfc.worldtides','');
-      el('refreshMins').value = Math.max(1, Math.min(60, Math.round(savedRefresh/60000)));
-      el('refresh-interval').textContent = Math.round(savedRefresh/60000);
-      REFRESH_MS = savedRefresh;
+// Kick it off
+updateAll(); scheduleAutoRefresh(); setInterval(updateNow,1000);
+</script>
 
-      sel.addEventListener('change', ()=>{ save('plfc.loc', sel.value); updateAll(); recenterMyMaps(); });
-      el('saveKey').addEventListener('click', ()=>{ save('plfc.worldtides', el('worldtidesKey').value.trim()); updateTides(); });
-      el('applyRefresh').addEventListener('click', ()=>{
-        const mins = clamp(parseInt(el('refreshMins').value||'15',10),1,60);
-        REFRESH_MS = mins*60*1000; save('plfc.refresh', REFRESH_MS);
-        el('refresh-interval').textContent = mins; scheduleAutoRefresh();
-      });
-      el('refreshBtn').addEventListener('click', ()=>updateAll());
-      document.querySelectorAll('[data-map-layer]').forEach(btn=>btn.addEventListener('click',()=>{
-        const layer = btn.dataset.mapLayer; centerToLayer(layer);
-      }));
-    }catch(err){
-      console.error('UI init failed', err);
-      // fail-safe defaults so the rest of the app still works
-      try{ el('location').value = DEFAULT_LOC; }catch{}
-    }
-  })();
-
-  function currentLoc(){
-    const name = (el('location')?.value) || DEFAULT_LOC;
-    return LOCATIONS[name] || LOCATIONS[DEFAULT_LOC];
-  }
-  function updateNow(){ el('now-local').textContent = new Date().toLocaleString(); }
-
-  // ====== GOOGLE MY MAPS ======
-  function recenterMyMaps(){
-    const {lat,lon} = currentLoc();
-    const url = new URL(el('mymaps').src);
-    url.searchParams.set('ll', `${lat.toFixed(5)},${lon.toFixed(5)}`);
-    url.searchParams.set('z', '12');
-    el('mymaps').src = url.toString();
-  }
-  function centerToLayer(layer){
-    if(layer==='all'){ el('mymaps').src = el('mymaps').src; return; }
-    const entry = Object.entries(LOCATIONS).find(([,v])=>v.layer===layer);
-    if(entry){ el('location').value = entry[0]; save('plfc.loc', entry[0]); recenterMyMaps(); updateAll(); }
-  }
-
-  // ====== FETCHERS ======
-  async function fetchJSON(url){
-    const r = await fetch(url);
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return r.json();
-  }
-
-  async function getSolunar(lat,lon,dateISO){
-    const base = `https://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
-    // Try direct; if CORS blocks, try a proxy that adds permissive CORS headers
-    try{
-      return await fetchJSON(base);
-    }catch(e1){
-      try{
-        const prox = `https://r.jina.ai/http://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
-        const r = await fetch(prox);
-        const txt = await r.text();
-        return JSON.parse(txt);
-      }catch(e2){
-        console.warn('Solunar failed (CORS or network). Falling back to sunrise/sunset from Open‑Meteo.', e1, e2);
-        return null;
-      }
-    }
-  },${lon},${dateISO},0`;
-    try{ return await fetchJSON(base); }
-    catch(e){ console.warn('Solunar failed (likely CORS). Falling back to sunrise/sunset only.', e); return null; }
-  }
-
-  async function getWeather(lat,lon){
-    const url = new URL('https://api.open-meteo.com/v1/forecast');
-    const tz = TZ || 'auto';
-    // Use only widely-supported params (hourly + daily). Some deployments 400 on `current`/`minutely_15`.
-    url.search = new URLSearchParams({ latitude:lat, longitude:lon, timezone: tz,
-      temperature_unit:'celsius', wind_speed_unit:'kmh', precipitation_unit:'mm',
-      hourly: [
-        'temperature_2m','wind_speed_10m','wind_gusts_10m','wind_direction_10m',
-        'relative_humidity_2m','precipitation_probability'
-      ].join(','),
-      daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
-    }).toString();
-    return fetchJSON(url);
-  }
-
-  function offshore(lat,lon,km=2,bearingDeg=100){
-    const R=6371; const br=bearingDeg*Math.PI/180; const d=km/R; const la=lat*Math.PI/180; const lo=lon*Math.PI/180;
-    const la2 = Math.asin(Math.sin(la)*Math.cos(d)+Math.cos(la)*Math.sin(d)*Math.cos(br));
-    const lo2 = lo + Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(la), Math.cos(d)-Math.sin(la)*Math.sin(la2));
-    return { lat: la2*180/Math.PI, lon: ((lo2*180/Math.PI+540)%360)-180 };
-  }
-  async function getMarine(lat,lon){
-    const sea = offshore(lat,lon,2,100);
-    const url = new URL('https://marine-api.open-meteo.com/v1/marine');
-    url.search = new URLSearchParams({ latitude:sea.lat, longitude:sea.lon, timezone: TZ || 'auto',
-      hourly: [
-        'wave_height','wave_direction','wave_period',
-        'wind_wave_height','wind_wave_direction','wind_wave_period',
-        'swell_wave_height','swell_wave_direction','swell_wave_period'
-      ].join(',')
-    }).toString();
-    return fetchJSON(url);
-  }
-
-  async function getTides(lat,lon){
-    const key = el('worldtidesKey').value.trim();
-    if(!key){ el('updated-tides').textContent = 'Add API key to show tides'; return {extremes:[]}; }
-    const url = new URL('https://www.worldtides.info/api');
-    url.search = new URLSearchParams({extremes: '', lat:lat, lon:lon, key:key, length: 48*3600}).toString();
-    const data = await fetchJSON(url);
-    el('updated-tides').textContent = 'Updated ' + new Date(data.creationDate||Date.now()).toLocaleString();
-    return data;
-  }
-
-  // ====== RENDER ======
-  let wxChart, waveChart, precipChart, waveBreakChart;
-  function destroyCharts(){
-    try{ if (wxChart) wxChart.destroy(); }catch{} wxChart=null;
-    try{ if (waveChart) waveChart.destroy(); }catch{} waveChart=null;
-    try{ if (precipChart) precipChart.destroy(); }catch{} precipChart=null;
-    try{ if (waveBreakChart) waveBreakChart.destroy(); }catch{} waveBreakChart=null;
-  }
-
-  function phaseName(idx){
-    if(typeof idx === 'string') return idx;
-    const names = ['New','Waxing Crescent','First Quarter','Waxing Gibbous','Full','Waning Gibbous','Last Quarter','Waning Crescent'];
-    return names[clamp(Math.round(idx||0),0,7)] || '—';
-  }
-
-  // Derive sunrise/sunset and moon info from Open‑Meteo daily fields as a fallback
-  function fillFromWeatherDaily(daily){
-    if(!daily) return;
-    if(daily.sunrise?.[0]) el('sunrise').textContent = fmtTime(daily.sunrise[0]);
-    if(daily.sunset?.[0])  el('sunset').textContent  = fmtTime(daily.sunset[0]);
-    if(typeof daily.moon_phase?.[0] === 'number'){
-      const phase = daily.moon_phase[0]; // 0..1 new->new
-      const illum = 0.5*(1 - Math.cos(2*Math.PI*phase));
-      el('moon-illum').textContent = Math.round(illum*100) + '%';
-      // map 0..1 to 0..7
-      el('moon-phase-pill').textContent = phaseName(Math.round((phase%1)*8));
-    }
-  }
-
-  function renderSolunar(data){
-    const show = (id, start, end)=>{
-      const elx = el(id);
-      if(start && end){ elx.textContent = fmtTime(start)+ ' – ' + fmtTime(end); }
-      else { elx.textContent = '—'; }
-    };
-    show('major-1', data.major1Start, data.major1End);
-    show('major-2', data.major2Start, data.major2End);
-    show('minor-1', data.minor1Start, data.minor1End);
-    show('minor-2', data.minor2Start, data.minor2End);
-    el('sunrise').textContent = data.sunRise ? fmtTime(data.sunRise) : '—';
-    el('sunset').textContent  = data.sunSet ? fmtTime(data.sunSet) : '—';
-    const illum = (data.moonIllumination||0)*100;
-    el('moon-illum').textContent = isFinite(illum) ? illum.toFixed(0)+'%' : '—';
-    el('moon-phase-pill').textContent = phaseName(data.moonPhaseIndex ?? data.moonPhase);
-    el('solunar-note').textContent = `Solunar: ${data.dayRating||''} • Moon: ${phaseName(data.moonPhaseIndex ?? data.moonPhase)} (${(illum||0).toFixed(0)}% illuminated)`;
-  }
-
-  function renderWeather(data){
-    if(!data?.hourly?.time?.length) return;
-    const { hourly, daily, minutely_15 } = data;
-    el('updated-weather').textContent = 'Updated ' + new Date().toLocaleTimeString();
-    const tbody = el('wxTable').querySelector('tbody');
-    tbody.innerHTML = '';
-    const rows = hourly.time.map((t,i)=>({
-      t,
-      temp: hourly.temperature_2m[i],
-      wind: hourly.wind_speed_10m[i],
-      gust: hourly.wind_gusts_10m[i],
-      dir: hourly.wind_direction_10m?.[i],
-      rh: hourly.relative_humidity_2m?.[i],
-      pop: hourly.precipitation_probability?.[i]
-    }));
-    const next12 = rows.slice(0, 12);
-    next12.forEach(r=>{
-      const tr=document.createElement('tr');
-      tr.innerHTML = `<td>${fmtTime(r.t)}</td><td>${r.temp?.toFixed?.(1)}</td><td>${r.wind?.toFixed?.(0)}</td><td>${r.gust?.toFixed?.(0)}</td><td>${r.dir ?? '—'}</td><td>${r.rh ?? '—'}</td><td>${r.pop ?? '—'}</td>`;
-      tbody.appendChild(tr);
-    });
-
-    // Chart: temp & wind (24h)
-    const ctx = document.getElementById('wxChart');
-    const labels = rows.slice(0,24).map(r=> new Date(r.t).toLocaleTimeString([], {hour:'2-digit'}) );
-    const temps = rows.slice(0,24).map(r=> r.temp );
-    const winds = rows.slice(0,24).map(r=> r.wind );
-    destroyCharts();
-    wxChart = new Chart(ctx, { type:'line', data:{ labels,
-        datasets:[ {label:'Temp °C', data:temps, yAxisID:'y'}, {label:'Wind km/h', data:winds, yAxisID:'y1'} ] },
-        options:{ responsive:true, maintainAspectRatio:false,
-          scales:{ y:{ beginAtZero:false, title:{display:true,text:'°C'} }, y1:{ beginAtZero:true, position:'right', grid:{drawOnChartArea:false}, title:{display:true,text:'km/h'} } }
-        }
-    });
-
-    // 15-min precip chart (next ~2h)
-    try{
-      const pctx = document.getElementById('precip15Chart');
-      const plabels = (minutely_15?.time||[]).slice(0,8).map(t=> new Date(t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) );
-      const pvals = (minutely_15?.precipitation||[]).slice(0,8);
-      if(precipChart){ try{precipChart.destroy()}catch{} }
-      precipChart = new Chart(pctx, { type:'bar', data:{ labels:plabels, datasets:[{label:'Precip mm (15 min)', data:pvals}] }, options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true } }, plugins:{ legend:{display:true} } } });
-      el('updated-precip').textContent = 'Updated ' + new Date().toLocaleTimeString();
-    }catch{}
-
-    // quick read — use the first hourly slot
-    const nowT = rows[0]?.temp; 
-    const nowW = rows[0]?.wind;
-    const bft = beaufortFromKmh(nowW||0);
-    el('quickRead').textContent = `Temp ${Number(nowT).toFixed(1)}°C • Wind ${Number(nowW).toFixed(0)} km/h (Bft ${bft.scale}: ${bft.name}) • UV max ${daily.uv_index_max?.[0] ?? '—'}`;
-    const nowT = c.temperature_2m ?? rows[0]?.temp; 
-    const nowW = c.wind_speed_10m ?? rows[0]?.wind;
-    const bft = beaufortFromKmh(nowW||0);
-    el('quickRead').textContent = `Temp ${Number(nowT).toFixed(1)}°C • Wind ${Number(nowW).toFixed(0)} km/h (Bft ${bft.scale}: ${bft.name}) • UV max ${daily.uv_index_max?.[0] ?? '—'}`;
-  }
-
-  function beaufortFromKmh(kmh){
-    const b = [1,5,11,19,28,38,49,61,74,88,102,117,1000];
-    const names = ['Calm','Light air','Light breeze','Gentle breeze','Moderate','Fresh','Strong','Near gale','Gale','Strong gale','Storm','Violent storm','Hurricane'];
-    let i = b.findIndex(x=> kmh <= x); if(i<0) i=b.length-1; return {scale:i, name:names[i]};
-  }
-
-  function renderMarine(data){
-    if(!data?.hourly?.time?.length) return;
-    const { hourly } = data;
-    el('updated-marine').textContent = 'Updated ' + new Date().toLocaleTimeString();
-
-    // Main marine table (Hs/Tp/Dir)
-    const tbody = el('marineTable').querySelector('tbody'); tbody.innerHTML='';
-    const rows = hourly.time.map((t,i)=>({ t,
-      hs: hourly.wave_height[i], tp: hourly.wave_period[i], dir: hourly.wave_direction[i],
-      wh: hourly.wind_wave_height?.[i], wt: hourly.wind_wave_period?.[i], wd: hourly.wind_wave_direction?.[i],
-      sh: hourly.swell_wave_height?.[i], st: hourly.swell_wave_period?.[i], sd: hourly.swell_wave_direction?.[i]
-    }));
-
-    const next12 = rows.slice(0,12);
-    next12.forEach(r=>{
-      const tr=document.createElement('tr'); tr.innerHTML = `<td>${fmtTime(r.t)}</td><td>${r.hs?.toFixed?.(2)}</td><td>${r.tp?.toFixed?.(1)}</td><td>${r.dir?.toFixed?.(0)}</td>`; tbody.appendChild(tr);
-    });
-
-    // Chart: Hs & Period (24h)
-    const ctx = document.getElementById('waveChart');
-    const labels = rows.slice(0,24).map(r=> new Date(r.t).toLocaleTimeString([], {hour:'2-digit'}) );
-    const hs = rows.slice(0,24).map(r=> r.hs );
-    const tp = rows.slice(0,24).map(r=> r.tp );
-    if(waveChart){try{waveChart.destroy()}catch{}}
-    waveChart = new Chart(ctx, { type:'line', data:{ labels,
-      datasets:[ {label:'Hs m', data:hs, yAxisID:'y'}, {label:'Period s', data:tp, yAxisID:'y1'} ] }, options:{ responsive:true, maintainAspectRatio:false,
-        scales:{ y:{ beginAtZero:true, title:{display:true,text:'m'} }, y1:{ beginAtZero:true, position:'right', grid:{drawOnChartArea:false}, title:{display:true,text:'s'} } }
-      }
-    });
-
-    // Swell vs Wind-wave comparison (heights)
-    const sw = rows.slice(0,24).map(r=> r.sh );
-    const ww = rows.slice(0,24).map(r=> r.wh );
-    const mountAfter = document.getElementById('waveBreakChart');
-    if (waveBreakChart) { try { waveBreakChart.destroy(); } catch {} }
-    waveBreakChart = new Chart(mountAfter, { type:'line', data:{ labels, datasets:[ {label:'Swell m', data:sw}, {label:'Wind-wave m', data:ww} ] }, options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, title:{display:true,text:'m'} } } } });
-
-    // Fill breakdown table (swell vs wind-wave)
-    const br = document.querySelector('#marineBreakTable tbody');
-    if (br) {
-      br.innerHTML = '';
-      rows.slice(0,12).forEach(r=>{
-        const tr=document.createElement('tr');
-        tr.innerHTML = `<td>${fmtTime(r.t)}</td><td>${r.sh ?? '—'}</td><td>${r.st ?? '—'}</td><td>${r.wh ?? '—'}</td><td>${r.wt ?? '—'}</td>`;
-        br.appendChild(tr);
-      });
-    }
-  }
-
-  function renderTides(data){
-    const tbody = el('tideTable').querySelector('tbody'); tbody.innerHTML='';
-    (data.extremes||[]).forEach(x=>{
-      const tr=document.createElement('tr'); tr.innerHTML = `<td>${fmtDateTime(x.dt*1000)}</td><td>${x.type}</td><td>${(x.height??0).toFixed(2)}</td>`; tbody.appendChild(tr);
-    });
-  }
-
-  // ====== ORCHESTRATION ======
-  async function updateAll(){
-    updateNow();
-    const {lat,lon} = currentLoc();
-    el('locName').textContent = el('location').value; el('locCoords').textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}  (${TZ})`;
-
-    const results = await Promise.allSettled([
-      getSolunar(lat,lon,toISODate(new Date())),
-      getWeather(lat,lon),
-      getMarine(lat,lon)
-    ]);
-
-    const [solRes, wxRes, marRes] = results;
-    if(wxRes.status==='fulfilled'){
-      try{ renderWeather(wxRes.value); }catch(err){ console.error('Render weather failed', err); }
-    } else { console.error('Weather fetch failed', wxRes.reason); }
-
-    if(marRes.status==='fulfilled'){
-      try{ renderMarine(marRes.value); }catch(err){ console.error('Render marine failed', err); }
-    } else { console.error('Marine fetch failed', marRes.reason); }
-
-    if(solRes.status==='fulfilled' && solRes.value){
-      try{
-        const sol = solRes.value || {};
-        const dISO = toISODate(new Date());
-        const payload = {
-          major1Start: parseSolunarTime(dISO, sol.major1Start),
-          major1End:   parseSolunarTime(dISO, sol.major1Stop),
-          major2Start: parseSolunarTime(dISO, sol.major2Start),
-          major2End:   parseSolunarTime(dISO, sol.major2Stop),
-          minor1Start: parseSolunarTime(dISO, sol.minor1Start),
-          minor1End:   parseSolunarTime(dISO, sol.minor1Stop),
-          minor2Start: parseSolunarTime(dISO, sol.minor2Start),
-          minor2End:   parseSolunarTime(dISO, sol.minor2Stop),
-          sunRise:     parseSolunarTime(dISO, sol.sunRise),
-          sunSet:      parseSolunarTime(dISO, sol.sunSet),
-          moonIllumination: (sol.moonIllumination ?? sol.moonPhasePct)/100,
-          moonPhaseIndex: sol.moonPhaseIndex,
-          moonPhase: sol.moonPhase,
-          dayRating: sol.dayRating ? `${sol.dayRating}/4` : ''
-        };
-        // If Solunar returned but with empty fields, top up from weather
-        const wxDaily = (wxRes.status==='fulfilled' ? wxRes.value.daily : null);
-        if(!payload.sunRise || !payload.sunSet || !isFinite(payload.moonIllumination)){
-          fillFromWeatherDaily(wxDaily);
-        }
-        renderSolunar(payload);
-      }catch(err){ console.warn('Solunar render failed', err); }
-    } else {
-      try{
-        const d = wxRes.status==='fulfilled' ? wxRes.value.daily : null;
-        fillFromWeatherDaily(d);
-        el('solunar-note').textContent = 'Solunar API unavailable; showing sunrise/sunset from weather.';
-      }catch{}
-    }
-      }catch{}
-    }
-
-    // Diagnostics
-    const diag=[];
-    function line(name,res){ if(!res) return diag.push(`${name}: no result`);
-      if(res.status!=='fulfilled') return diag.push(`${name}: FAIL → ${String(res.reason)}`);
-      return diag.push(`${name}: ok (bytes ~${JSON.stringify(res.value).length})`);
-    }
-    line('Weather', wxRes); line('Marine', marRes); line('Solunar', solRes);
-    console.log('[PLFC diag]', diag.join(' • '));
-
-    updateTides();
-    recenterMyMaps();
-  }
-
-  async function updateTides(){
-    try{
-      const {lat,lon} = currentLoc();
-      const t = await getTides(lat,lon);
-      renderTides(t);
-    }catch(e){ console.warn('Tides unavailable', e); }
-  }
-
-  let refreshTimer; 
-  function scheduleAutoRefresh(){
-    if(refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(updateAll, load('plfc.refresh', REFRESH_MS));
-  }
-
-  // Kick it off
-  updateAll();
-  scheduleAutoRefresh();
-  setInterval(updateNow, 1000);
-  </script>
 </body>
 </html>
