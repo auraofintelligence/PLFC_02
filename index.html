@@ -317,15 +317,14 @@
   async function getWeather(lat,lon){
     const url = new URL('https://api.open-meteo.com/v1/forecast');
     const tz = TZ || 'auto';
+    // Use only widely-supported params (hourly + daily). Some deployments 400 on `current`/`minutely_15`.
     url.search = new URLSearchParams({ latitude:lat, longitude:lon, timezone: tz,
       temperature_unit:'celsius', wind_speed_unit:'kmh', precipitation_unit:'mm',
       hourly: [
         'temperature_2m','wind_speed_10m','wind_gusts_10m','wind_direction_10m',
         'relative_humidity_2m','precipitation_probability'
       ].join(','),
-      daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(','),
-      current: ['temperature_2m','wind_speed_10m','wind_direction_10m','is_day','precipitation'].join(','),
-      minutely_15: ['precipitation'].join(',')
+      daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
     }).toString();
     return fetchJSON(url);
   }
@@ -408,7 +407,7 @@
 
   function renderWeather(data){
     if(!data?.hourly?.time?.length) return;
-    const { hourly, daily, current, minutely_15 } = data;
+    const { hourly, daily, minutely_15 } = data;
     el('updated-weather').textContent = 'Updated ' + new Date().toLocaleTimeString();
     const tbody = el('wxTable').querySelector('tbody');
     tbody.innerHTML = '';
@@ -451,8 +450,11 @@
       el('updated-precip').textContent = 'Updated ' + new Date().toLocaleTimeString();
     }catch{}
 
-    // quick read using current conditions if available
-    const c = current || {};
+    // quick read — use the first hourly slot
+    const nowT = rows[0]?.temp; 
+    const nowW = rows[0]?.wind;
+    const bft = beaufortFromKmh(nowW||0);
+    el('quickRead').textContent = `Temp ${Number(nowT).toFixed(1)}°C • Wind ${Number(nowW).toFixed(0)} km/h (Bft ${bft.scale}: ${bft.name}) • UV max ${daily.uv_index_max?.[0] ?? '—'}`;
     const nowT = c.temperature_2m ?? rows[0]?.temp; 
     const nowW = c.wind_speed_10m ?? rows[0]?.wind;
     const bft = beaufortFromKmh(nowW||0);
