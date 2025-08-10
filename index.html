@@ -286,16 +286,26 @@ function centerToLayer(layer){
 // ====== FETCHERS ======
 async function fetchJSON(url){ const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
 
-async function getSolunar(lat,lon,dateISO){
-  const base=`https://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
-  try{ return await fetchJSON(base); }
-  catch(e1){
-    // CORS-safe text proxy
+async function getSolunar(lat, lon, dateISO){
+  const tzHours = -new Date().getTimezoneOffset()/60; // e.g. +10 for Brisbane
+  const endpoints = [
+    `https://api.solunar.org/solunar/${lat},${lon},${dateISO},${tzHours}`,
+    // CORS/text proxies fallback (try a couple)
+    `https://r.jina.ai/http://api.solunar.org/solunar/${lat},${lon},${dateISO},${tzHours}`,
+    `https://cors.isomorphic-git.org/http://api.solunar.org/solunar/${lat},${lon},${dateISO},${tzHours}`
+  ];
+  for (const url of endpoints){
     try{
-      const prox=`https://r.jina.ai/http://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
-      const r=await fetch(prox); return JSON.parse(await r.text());
-    }catch(e2){ console.warn('Solunar failed',e1,e2); return null; }
+      const r = await fetch(url);
+      const txt = await r.text();
+      // jina returns text; direct returns JSON — handle both
+      const data = typeof txt === 'string' ? JSON.parse(txt) : await r.json();
+      // sanity check: must have at least one of these keys
+      const ok = data && (data.major1Start || data.minor1Start || data.sunRise || data.moonPhase !== undefined);
+      if (ok) return data;
+    }catch(e){ /* try next endpoint */ }
   }
+  return null; // we’ll fall back to Open-Meteo sunrise/sunset
 }
 
 async function getWeather(lat,lon){
@@ -459,24 +469,42 @@ async function updateAll(){
   if(marRes.status==='fulfilled'){ try{renderMarine(marRes.value);}catch(e){console.error('Render marine failed',e);} }
   else { console.error('Marine fetch failed',marRes.reason); }
 
-  if(solRes.status==='fulfilled'&&solRes.value){
-    try{
-      const sol=solRes.value||{}; const dISO=toISODate(new Date());
-      const payload={
-        major1Start:parseSolunarTime(dISO,sol.major1Start), major1End:parseSolunarTime(dISO,sol.major1Stop),
-        major2Start:parseSolunarTime(dISO,sol.major2Start), major2End:parseSolunarTime(dISO,sol.major2Stop),
-        minor1Start:parseSolunarTime(dISO,sol.minor1Start), minor1End:parseSolunarTime(dISO,sol.minor1Stop),
-        minor2Start:parseSolunarTime(dISO,sol.minor2Start), minor2End:parseSolunarTime(dISO,sol.minor2Stop),
-        sunRise:parseSolunarTime(dISO,sol.sunRise), sunSet:parseSolunarTime(dISO,sol.sunSet),
-        moonIllumination:(sol.moonIllumination??sol.moonPhasePct)/100,
-        moonPhaseIndex:sol.moonPhaseIndex, moonPhase:sol.moonPhase, dayRating:sol.dayRating?`${sol.dayRating}/4`:''
-      };
-      if(wxRes.status==='fulfilled'){ const wxDaily=wxRes.value.daily; if(!payload.sunRise||!payload.sunSet||!isFinite(payload.moonIllumination)) fillFromWeatherDaily(wxDaily); }
-      renderSolunar(payload);
-    }catch(e){ console.warn('Solunar render failed',e); }
-  }else{
-    try{ const d=wxRes.status==='fulfilled'?wxRes.value.daily:null; fillFromWeatherDaily(d); el('solunar-note').textContent='Solunar API unavailable; showing sunrise/sunset from weather.'; }catch{}
+ if (solRes.status === 'fulfilled' && solRes.value) {
+  try {
+    const sol = solRes.value || {};
+    const dISO = toISODate(new Date());
+    const payload = {
+      major1Start: parseSolunarTime(dISO, sol.major1Start), major1End: parseSolunarTime(dISO, sol.major1Stop),
+      major2Start: parseSolunarTime(dISO, sol.major2Start), major2End: parseSolunarTime(dISO, sol.major2Stop),
+      minor1Start: parseSolunarTime(dISO, sol.minor1Start), minor1End: parseSolunarTime(dISO, sol.minor1Stop),
+      minor2Start: parseSolunarTime(dISO, sol.minor2Start), minor2End: parseSolunarTime(dISO, sol.minor2Stop),
+      sunRise: parseSolunarTime(dISO, sol.sunRise), sunSet: parseSolunarTime(dISO, sol.sunSet),
+      moonIllumination: (sol.moonIllumination ?? sol.moonPhasePct) / 100,
+      moonPhaseIndex: sol.moonPhaseIndex, moonPhase: sol.moonPhase,
+      dayRating: sol.dayRating ? `${sol.dayRating}/4` : ''
+    };
+    if (wxRes.status === 'fulfilled') {
+      const wxDaily = wxRes.value.daily;
+      if (!payload.sunRise || !payload.sunSet || !isFinite(payload.moonIllumination)) {
+        fillFromWeatherDaily(wxDaily);
+      }
+    }
+    renderSolunar(payload);
+
+    // Add status hint if Solunar returned but lacked key times
+    if (!payload.major1Start && !payload.major2Start && !payload.minor1Start && !payload.minor2Start) {
+      el('solunar-note').textContent = 'Solunar API returned minimal data; showing only what’s available.';
+    }
+  } catch (e) {
+    console.warn('Solunar render failed', e);
   }
+} else {
+  try {
+    const d = wxRes.status === 'fulfilled' ? wxRes.value.daily : null;
+    fillFromWeatherDaily(d);
+    el('solunar-note').textContent = 'Solunar API unavailable; showing sunrise/sunset from weather.';
+  } catch {}
+}
 
   // Diagnostics
   const diag=[];
