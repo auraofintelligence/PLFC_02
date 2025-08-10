@@ -222,7 +222,7 @@
     if(Number.isNaN(h) || Number.isNaN(m)) return null;
     if(ap==='pm' && h<12) h+=12; if(ap==='am' && h===12) h=0;
     const d = new Date(`${dateISO}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`);
-    return isNaN(d) ? null : d;
+    return Number.isNaN(d.getTime()) ? null : d;
   }
 
   // ====== CONFIG ======
@@ -295,6 +295,21 @@
 
   async function getSolunar(lat,lon,dateISO){
     const base = `https://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
+    // Try direct; if CORS blocks, try a proxy that adds permissive CORS headers
+    try{
+      return await fetchJSON(base);
+    }catch(e1){
+      try{
+        const prox = `https://r.jina.ai/http://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
+        const r = await fetch(prox);
+        const txt = await r.text();
+        return JSON.parse(txt);
+      }catch(e2){
+        console.warn('Solunar failed (CORS or network). Falling back to sunrise/sunset from Open‑Meteo.', e1, e2);
+        return null;
+      }
+    }
+  },${lon},${dateISO},0`;
     try{ return await fetchJSON(base); }
     catch(e){ console.warn('Solunar failed (likely CORS). Falling back to sunrise/sunset only.', e); return null; }
   }
@@ -357,6 +372,20 @@
     if(typeof idx === 'string') return idx;
     const names = ['New','Waxing Crescent','First Quarter','Waxing Gibbous','Full','Waning Gibbous','Last Quarter','Waning Crescent'];
     return names[clamp(Math.round(idx||0),0,7)] || '—';
+  }
+
+  // Derive sunrise/sunset and moon info from Open‑Meteo daily fields as a fallback
+  function fillFromWeatherDaily(daily){
+    if(!daily) return;
+    if(daily.sunrise?.[0]) el('sunrise').textContent = fmtTime(daily.sunrise[0]);
+    if(daily.sunset?.[0])  el('sunset').textContent  = fmtTime(daily.sunset[0]);
+    if(typeof daily.moon_phase?.[0] === 'number'){
+      const phase = daily.moon_phase[0]; // 0..1 new->new
+      const illum = 0.5*(1 - Math.cos(2*Math.PI*phase));
+      el('moon-illum').textContent = Math.round(illum*100) + '%';
+      // map 0..1 to 0..7
+      el('moon-phase-pill').textContent = phaseName(Math.round((phase%1)*8));
+    }
   }
 
   function renderSolunar(data){
@@ -515,9 +544,9 @@
 
     if(solRes.status==='fulfilled' && solRes.value){
       try{
-        const sol = solRes.value;
+        const sol = solRes.value || {};
         const dISO = toISODate(new Date());
-        renderSolunar({
+        const payload = {
           major1Start: parseSolunarTime(dISO, sol.major1Start),
           major1End:   parseSolunarTime(dISO, sol.major1Stop),
           major2Start: parseSolunarTime(dISO, sol.major2Start),
@@ -532,17 +561,21 @@
           moonPhaseIndex: sol.moonPhaseIndex,
           moonPhase: sol.moonPhase,
           dayRating: sol.dayRating ? `${sol.dayRating}/4` : ''
-        });
+        };
+        // If Solunar returned but with empty fields, top up from weather
+        const wxDaily = (wxRes.status==='fulfilled' ? wxRes.value.daily : null);
+        if(!payload.sunRise || !payload.sunSet || !isFinite(payload.moonIllumination)){
+          fillFromWeatherDaily(wxDaily);
+        }
+        renderSolunar(payload);
       }catch(err){ console.warn('Solunar render failed', err); }
     } else {
       try{
         const d = wxRes.status==='fulfilled' ? wxRes.value.daily : null;
-        if(d){
-          el('sunrise').textContent = d.sunrise?.[0] ? fmtTime(d.sunrise[0]) : '—';
-          el('sunset').textContent  = d.sunset?.[0] ? fmtTime(d.sunset[0]) : '—';
-          el('moon-phase-pill').textContent = '—';
-          el('solunar-note').textContent = 'Solunar API unavailable; showing sunrise/sunset only.';
-        }
+        fillFromWeatherDaily(d);
+        el('solunar-note').textContent = 'Solunar API unavailable; showing sunrise/sunset from weather.';
+      }catch{}
+    }
       }catch{}
     }
 
