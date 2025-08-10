@@ -340,10 +340,11 @@ async function getWeather(lat, lon){
       'precipitation_probability'
     ].join(','),
     daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
-    // NOTE: removed minutely_15 for reliability; we can add it back once we confirm 200 OK
   }).toString();
   console.log('[WX URL]', url.toString());
-  return fetchJSON(url);
+  const data = await fetchJSON(url);
+  console.log('[WX Data]', data); // Debug log
+  return data;
 }
 
 
@@ -411,12 +412,14 @@ function renderSolunar(data){
   el('solunar-note').textContent=`Solunar: ${data.dayRating||''} • Moon: ${phaseName(data.moonPhaseIndex??data.moonPhase)} (${(illum||0).toFixed(0)}% illuminated)`;
 }
 function renderWeather(data){
+  console.log('[WX Render] Starting with data:', data);
   const h = data?.hourly;
-if(!h || !h.time?.length){
-  el('updated-weather').textContent = 'No weather data received';
-  console.warn('[WX] Missing hourly data', data);
-  return;
-}
+  if(!h || !h.time?.length){
+    el('updated-weather').textContent = 'No weather data received';
+    console.warn('[WX] Missing hourly data', data);
+    return;
+  }
+  console.log('[WX Render] Hourly data found:', h.time.length, 'entries');
   const d = data.daily || {};
   el('updated-weather').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
@@ -482,6 +485,18 @@ if(!h || !h.time?.length){
       options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true } } }
     });
     el('updated-precip').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } else {
+    // Show message when 15-min data isn't available
+    el('updated-precip').textContent = '15-min data not available';
+    const canvas = document.getElementById('precip15Chart');
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'var(--muted)';
+      ctx.font = '14px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('15-min precipitation data', canvas.width/2, canvas.height/2 - 10);
+      ctx.fillText('not available from API', canvas.width/2, canvas.height/2 + 10);
+    }
   }
 }
 function beaufortFromKmh(kmh){
