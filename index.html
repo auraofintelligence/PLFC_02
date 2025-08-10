@@ -44,6 +44,19 @@
     .notice{border-left:3px solid var(--accent); padding-left:10px; color:var(--muted)}
     a{color:#7bb6ff}
     .card canvas { display:block; width:100%; height:180px !important; max-height:220px; }
+    /* Landing layout: Map tall at left, Solunar top-right, Waves under Solunar */
+.landing{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}
+.map-card{grid-row:span 2}                 /* make the map column tall */
+.map-frame{height:clamp(560px, 76vh, 820px)}/* taller vertical map; responsive */
+.map-frame iframe{width:100%;height:100%;border:0;border-radius:12px}
+
+/* Mobile/tablet: stack */
+@media (max-width:1100px){
+  .landing{grid-template-columns:1fr}
+  .map-card{grid-row:auto}
+  .map-frame{height:420px}
+}
+
   </style>
   <!-- Charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
@@ -65,24 +78,45 @@
   </header>
 
   <main class="wrap" id="app">
-    <div class="row">
-      <section class="card">
-        <div class="section-title">
-          <h2>Google My Maps</h2>
-          <div class="map-toggle small">Layer:
-            <button class="pill" data-map-layer="all">All</button>
-            <button class="pill" data-map-layer="point-lookout">Point Lookout</button>
-            <button class="pill" data-map-layer="amity">Amity</button>
-            <button class="pill" data-map-layer="dunwich">Dunwich</button>
-            <button class="pill" data-map-layer="jumpinpin">Jumpinpin</button>
-          </div>
-        </div>
-        <div class="notice small">This iframe uses a My‑Maps <em>mid</em>. Replace <code>1pZdqmQfqAUfK53FadLULB_5mQ0qC0iY</code> below with your shared map ID. Layer buttons change the <em>ll</em> and <em>z</em> params to jump around hotspots.</div>
-        <div style="aspect-ratio:16/9; margin-top:8px">
-          <iframe id="mymaps" title="PLFC Spots" width="100%" height="100%" style="border:0;border-radius:12px" allowfullscreen
-            src="https://www.google.com/maps/d/embed?mid=1pZdqmQfqAUfK53FadLULB_5mQ0qC0iY&ehbc=2E312F&ll=-27.4310,153.5470&z=11"></iframe>
-        </div>
-      </section>
+    <!-- Landing grid: Map (tall left), Solunar (top-right), Waves (under Solunar) -->
+<div class="landing" style="margin-top:0">
+  <!-- Map -->
+  <section class="card map-card">
+    <div class="section-title">
+      <h2>Google My Maps</h2>
+      <div class="map-toggle small">Layer:
+        <button class="pill" data-map-layer="all">All</button>
+        <button class="pill" data-map-layer="point-lookout">Point Lookout</button>
+        <button class="pill" data-map-layer="amity">Amity</button>
+        <button class="pill" data-map-layer="dunwich">Dunwich</button>
+        <button class="pill" data-map-layer="jumpinpin">Jumpinpin</button>
+      </div>
+    </div>
+    <div class="notice small">This iframe uses a My-Maps <em>mid</em>…</div>
+    <div class="map-frame">  <!-- was a div with aspect-ratio -->
+      <iframe id="mymaps" title="PLFC Spots" allowfullscreen
+        src="https://www.google.com/maps/d/embed?mid=1pZdqmQfqAUfK53FadLULB_5mQ0qC0iY&ehbc=2E312F&ll=-27.4310,153.5470&z=11">
+      </iframe>
+    </div>
+  </section>
+
+  <!-- Solunar -->
+  <section class="card">
+    <div class="section-title"><h2>Solunar Bite Windows</h2><span class="pill" id="moon-phase-pill">—</span></div>
+    <!-- keep your existing Solunar markup -->
+    <div id="solunar">…</div>
+  </section>
+
+  <!-- Waves — Swell vs Wind-wave (moves to right column, under Solunar) -->
+  <section class="card">
+    <div class="section-title"><h2>Waves — Swell vs Wind-wave</h2><span class="pill">24h</span></div>
+    <canvas id="waveBreakChart" height="120"></canvas>
+    <table id="marineBreakTable" style="margin-top:8px">
+      <thead>…</thead><tbody></tbody>
+    </table>
+  </section>
+</div>
+
 
       <section class="card">
         <div class="section-title"><h2>Solunar Bite Windows</h2><span class="pill" id="moon-phase-pill">—</span></div>
@@ -323,11 +357,13 @@ async function getWeather(lat, lon){
       'relative_humidity_2m',
       'precipitation_probability'
     ].join(','),
-    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(','),
-    minutely_15: 'precipitation'
+    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
+    // NOTE: removed minutely_15 for reliability; we can add it back once we confirm 200 OK
   }).toString();
+  console.log('[WX URL]', url.toString());
   return fetchJSON(url);
 }
+
 
 function offshore(lat,lon,km=2,bearingDeg=100){
   const R=6371, br=bearingDeg*Math.PI/180, d=km/R, la=lat*Math.PI/180, lo=lon*Math.PI/180;
@@ -393,7 +429,12 @@ function renderSolunar(data){
   el('solunar-note').textContent=`Solunar: ${data.dayRating||''} • Moon: ${phaseName(data.moonPhaseIndex??data.moonPhase)} (${(illum||0).toFixed(0)}% illuminated)`;
 }
 function renderWeather(data){
-  const h = data?.hourly; if(!h || !h.time?.length) return;
+  const h = data?.hourly;
+if(!h || !h.time?.length){
+  el('updated-weather').textContent = 'No weather data received';
+  console.warn('[WX] Missing hourly data', data);
+  return;
+}
   const d = data.daily || {};
   el('updated-weather').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
