@@ -16,6 +16,7 @@
     .wrap{max-width:1200px;margin:0 auto;padding:16px}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:16px;grid-auto-flow:dense;align-items:start}
 .row-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;grid-auto-flow:dense;align-items:start}
+.landing{grid-auto-flow:dense;align-items:start}
     .row-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
     @media (max-width:900px){.row,.row-3,.row-4{grid-template-columns:1fr}}
     .card{background:var(--card);border:1px solid var(--border);border-radius:16px; padding:14px; box-shadow:0 10px 30px rgba(0,0,0,.25)}
@@ -326,8 +327,7 @@ async function getSolunar(lat, lon, dateISO){
 }
 
 async function getWeather(lat, lon){
-  const url = new URL('https://api.open-meteo.com/v1/forecast');
-  url.search = new URLSearchParams({
+  const base = {
     latitude: lat, longitude: lon, timezone: TZ || 'auto',
     forecast_days: 3,
     temperature_unit: 'celsius',
@@ -339,13 +339,23 @@ async function getWeather(lat, lon){
       'relative_humidity_2m',
       'precipitation_probability'
     ].join(','),
-    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(','),
-    minutely_15: 'precipitation'
-  }).toString();
-  console.log('[WX URL]', url.toString());
-  const data = await fetchJSON(url);
-  console.log('[WX Data]', data); // Debug log
-  return data;
+    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
+  };
+
+  // Try with minutely_15 first
+  const withNowcast = new URL('https://api.open-meteo.com/v1/forecast');
+  withNowcast.search = new URLSearchParams({ ...base, minutely_15: 'precipitation' }).toString();
+  console.log('[WX URL try1]', withNowcast.toString());
+
+  try {
+    return await fetchJSON(withNowcast);
+  } catch (e) {
+    console.warn('[WX] minutely_15 not available here — retrying without it', e);
+    const fallback = new URL('https://api.open-meteo.com/v1/forecast');
+    fallback.search = new URLSearchParams(base).toString();
+    console.log('[WX URL try2]', fallback.toString());
+    return fetchJSON(fallback);
+  }
 }
 
 
@@ -414,13 +424,23 @@ function renderSolunar(data){
 }
 function renderWeather(data){
   console.log('[WX Render] Starting with data:', data);
+  console.log('[WX Render] Data type:', typeof data);
+  console.log('[WX Render] Data keys:', Object.keys(data || {}));
+  
   const h = data?.hourly;
+  console.log('[WX Render] Hourly object:', h);
+  console.log('[WX Render] Hourly keys:', Object.keys(h || {}));
+  
   if(!h || !Array.isArray(h.time) || !h.time.length){
     el('updated-weather').textContent = 'No weather data received';
     console.warn('[WX] Missing hourly data', data);
     return;
   }
   console.log('[WX Render] Hourly data found:', h.time.length, 'entries');
+  console.log('[WX Render] First few time entries:', h.time.slice(0, 3));
+  console.log('[WX Render] Temperature data length:', (h.temperature_2m || []).length);
+  console.log('[WX Render] Wind data length:', (h.wind_speed_10m || []).length);
+  
   const d = data.daily || {};
   el('updated-weather').textContent = 'Updated ' + new Date().toLocaleTimeString();
   
@@ -430,6 +450,8 @@ function renderWeather(data){
     (h.temperature_2m||[]).length,
     (h.wind_speed_10m||[]).length
   ) || 0;
+  
+  console.log('[WX Render] Calculated usable rows:', n);
   
   if (!n){
     el('updated-weather').textContent = 'No usable hourly rows';
