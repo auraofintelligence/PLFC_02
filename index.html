@@ -169,9 +169,24 @@
           <tbody></tbody>
         </table>
       </section>
+
+      <section class="card">
+        <div class="section-title"><h2>Now</h2><span class="pill" id="now-local">—</span></div>
+        <div class="grid">
+          <div>
+            <h3>Location</h3>
+            <div id="locName" class="kpi">—</div>
+            <div class="kpi-sub" id="locCoords">—</div>
+          </div>
+          <div>
+            <h3>Quick Read</h3>
+            <div id="quickRead" class="small"></div>
+          </div>
+        </div>
+      </section>
     </div>
 
-    <div class="row" style="margin-top:16px">
+    <div class="row-3" style="margin-top:16px">
       <section class="card">
         <div class="section-title"><h2>Tides (WorldTides)</h2><span class="pill" id="updated-tides">Requires API key</span></div>
         <div class="flex">
@@ -188,21 +203,6 @@
       <section class="card">
         <div class="section-title"><h2>Precipitation Nowcast (15‑min)</h2><span class="pill" id="updated-precip">—</span></div>
         <canvas id="precip15Chart" height="120"></canvas>
-      </section>
-
-      <section class="card">
-        <div class="section-title"><h2>Now</h2><span class="pill" id="now-local">—</span></div>
-        <div class="grid">
-          <div>
-            <h3>Location</h3>
-            <div id="locName" class="kpi">—</div>
-            <div class="kpi-sub" id="locCoords">—</div>
-          </div>
-          <div>
-            <h3>Quick Read</h3>
-            <div id="quickRead" class="small"></div>
-          </div>
-        </div>
       </section>
     </div>
 
@@ -339,7 +339,8 @@ async function getWeather(lat, lon){
       'relative_humidity_2m',
       'precipitation_probability'
     ].join(','),
-    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
+    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(','),
+    minutely_15: 'precipitation'
   }).toString();
   console.log('[WX URL]', url.toString());
   const data = await fetchJSON(url);
@@ -486,16 +487,30 @@ function renderWeather(data){
     });
     el('updated-precip').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } else {
-    // Show message when 15-min data isn't available
-    el('updated-precip').textContent = '15-min data not available';
-    const canvas = document.getElementById('precip15Chart');
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = 'var(--muted)';
-      ctx.font = '14px system-ui';
-      ctx.textAlign = 'center';
-      ctx.fillText('15-min precipitation data', canvas.width/2, canvas.height/2 - 10);
-      ctx.fillText('not available from API', canvas.width/2, canvas.height/2 + 10);
+    // fallback: show next 8 hours of rain probability as a bar chart
+    const h = data.hourly || {};
+    const labels = (h.time || []).slice(0,8).map(t => new Date(t).toLocaleTimeString([], {hour:'2-digit'}));
+    const rainPct = (h.precipitation_probability || []).slice(0,8);
+    
+    if (labels.length && rainPct.length) {
+      if (precipChart) { try{precipChart.destroy()}catch{} }
+      precipChart = new Chart(document.getElementById('precip15Chart'),{
+        type:'bar',
+        data:{ labels, datasets:[{ label:'Rain % (hourly)', data: rainPct }] },
+        options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } } }
+      });
+      el('updated-precip').textContent = 'Hourly fallback';
+    } else {
+      el('updated-precip').textContent = 'No nowcast available for this spot/time.';
+      const canvas = document.getElementById('precip15Chart');
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'var(--muted)';
+        ctx.font = '14px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('15-min precipitation data', canvas.width/2, canvas.height/2 - 10);
+        ctx.fillText('not available from API', canvas.width/2, canvas.height/2 + 10);
+      }
     }
   }
 }
