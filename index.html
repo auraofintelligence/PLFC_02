@@ -14,8 +14,8 @@
     body{margin:0;font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu; background:var(--bg); color:var(--text)}
     header{position:sticky;top:0;z-index:10;background:linear-gradient(180deg, rgba(11,18,32,.98), rgba(11,18,32,.7));backdrop-filter:saturate(1.2) blur(8px);}    
     .wrap{max-width:1200px;margin:0 auto;padding:16px}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-    .row-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:16px;grid-auto-flow:dense;align-items:start}
+.row-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;grid-auto-flow:dense;align-items:start}
     .row-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
     @media (max-width:900px){.row,.row-3,.row-4{grid-template-columns:1fr}}
     .card{background:var(--card);border:1px solid var(--border);border-radius:16px; padding:14px; box-shadow:0 10px 30px rgba(0,0,0,.25)}
@@ -200,7 +200,7 @@
         <div class="small muted">Tip: get a key at worldtides.info (global predictions). Key is stored in your browser only.</div>
       </section>
 
-      <section class="card">
+      <section class="card" style="grid-column: span 2">
         <div class="section-title"><h2>Precipitation Nowcast (15‑min)</h2><span class="pill" id="updated-precip">—</span></div>
         <canvas id="precip15Chart" height="120"></canvas>
       </section>
@@ -415,7 +415,7 @@ function renderSolunar(data){
 function renderWeather(data){
   console.log('[WX Render] Starting with data:', data);
   const h = data?.hourly;
-  if(!h || !h.time?.length){
+  if(!h || !Array.isArray(h.time) || !h.time.length){
     el('updated-weather').textContent = 'No weather data received';
     console.warn('[WX] Missing hourly data', data);
     return;
@@ -423,16 +423,28 @@ function renderWeather(data){
   console.log('[WX Render] Hourly data found:', h.time.length, 'entries');
   const d = data.daily || {};
   el('updated-weather').textContent = 'Updated ' + new Date().toLocaleTimeString();
-
-  // build rows
-  const rows = h.time.map((t,i)=>({
+  
+  // Guard every series length to the shortest available
+  const n = Math.min(
+    h.time.length,
+    (h.temperature_2m||[]).length,
+    (h.wind_speed_10m||[]).length
+  ) || 0;
+  
+  if (!n){
+    el('updated-weather').textContent = 'No usable hourly rows';
+    console.warn('[WX] Series present but empty lengths', h);
+    return;
+  }
+  
+  const rows = h.time.slice(0,n).map((t,i)=>({
     t,
-    temp: h.temperature_2m?.[i],
-    wind: h.wind_speed_10m?.[i],
-    gust: h.wind_gusts_10m?.[i],
-    dir:  h.wind_direction_10m?.[i],
-    rh:   h.relative_humidity_2m?.[i],
-    pop:  h.precipitation_probability?.[i]
+    temp: (h.temperature_2m||[])[i],
+    wind: (h.wind_speed_10m||[])[i],
+    gust: (h.wind_gusts_10m||[])[i],
+    dir: (h.wind_direction_10m||[])[i],
+    rh: (h.relative_humidity_2m||[])[i],
+    pop: (h.precipitation_probability||[])[i]
   }));
 
   // table (next 12 hours)
@@ -488,9 +500,9 @@ function renderWeather(data){
     el('updated-precip').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } else {
     // fallback: show next 8 hours of rain probability as a bar chart
-    const h = data.hourly || {};
-    const labels = (h.time || []).slice(0,8).map(t => new Date(t).toLocaleTimeString([], {hour:'2-digit'}));
-    const rainPct = (h.precipitation_probability || []).slice(0,8);
+    const hh = data.hourly || {}; // NOTE: user suggested changing this to `hh` to avoid shadowing
+    const labels = (hh.time || []).slice(0,8).map(t => new Date(t).toLocaleTimeString([], {hour:'2-digit'}));
+    const rainPct = (hh.precipitation_probability || []).slice(0,8);
     
     if (labels.length && rainPct.length) {
       if (precipChart) { try{precipChart.destroy()}catch{} }
@@ -505,7 +517,8 @@ function renderWeather(data){
       const canvas = document.getElementById('precip15Chart');
       if (canvas) {
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'var(--muted)';
+        const muted = getComputedStyle(document.documentElement).getPropertyValue('--muted') || '#93a1bd';
+        ctx.fillStyle = muted.trim();
         ctx.font = '14px system-ui';
         ctx.textAlign = 'center';
         ctx.fillText('15-min precipitation data', canvas.width/2, canvas.height/2 - 10);
