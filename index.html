@@ -221,7 +221,7 @@
     let h = parseInt(bits[0],10); let m = parseInt(bits[1],10);
     if(Number.isNaN(h) || Number.isNaN(m)) return null;
     if(ap==='pm' && h<12) h+=12; if(ap==='am' && h===12) h=0;
-    const d = new Date(${dateISO}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00);
+    const d = new Date(`${dateISO}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`);
     return isNaN(d) ? null : d;
   }
 
@@ -276,7 +276,7 @@
   function recenterMyMaps(){
     const {lat,lon} = currentLoc();
     const url = new URL(el('mymaps').src);
-    url.searchParams.set('ll', ${lat.toFixed(5)},${lon.toFixed(5)});
+    url.searchParams.set('ll', `${lat.toFixed(5)},${lon.toFixed(5)}`);
     url.searchParams.set('z', '12');
     el('mymaps').src = url.toString();
   }
@@ -294,7 +294,7 @@
   }
 
   async function getSolunar(lat,lon,dateISO){
-    const base = https://api.solunar.org/solunar/${lat},${lon},${dateISO},0;
+    const base = `https://api.solunar.org/solunar/${lat},${lon},${dateISO},0`;
     try{ return await fetchJSON(base); }
     catch(e){ console.warn('Solunar failed (likely CORS). Falling back to sunrise/sunset only.', e); return null; }
   }
@@ -374,7 +374,7 @@
     const illum = (data.moonIllumination||0)*100;
     el('moon-illum').textContent = isFinite(illum) ? illum.toFixed(0)+'%' : '—';
     el('moon-phase-pill').textContent = phaseName(data.moonPhaseIndex ?? data.moonPhase);
-    el('solunar-note').textContent = Solunar: ${data.dayRating||''} • Moon: ${phaseName(data.moonPhaseIndex ?? data.moonPhase)} (${(illum||0).toFixed(0)}% illuminated);
+    el('solunar-note').textContent = `Solunar: ${data.dayRating||''} • Moon: ${phaseName(data.moonPhaseIndex ?? data.moonPhase)} (${(illum||0).toFixed(0)}% illuminated)`;
   }
 
   function renderWeather(data){
@@ -395,7 +395,7 @@
     const next12 = rows.slice(0, 12);
     next12.forEach(r=>{
       const tr=document.createElement('tr');
-      tr.innerHTML = <td>${fmtTime(r.t)}</td><td>${r.temp?.toFixed?.(1)}</td><td>${r.wind?.toFixed?.(0)}</td><td>${r.gust?.toFixed?.(0)}</td><td>${r.dir ?? '—'}</td><td>${r.rh ?? '—'}</td><td>${r.pop ?? '—'}</td>;
+      tr.innerHTML = `<td>${fmtTime(r.t)}</td><td>${r.temp?.toFixed?.(1)}</td><td>${r.wind?.toFixed?.(0)}</td><td>${r.gust?.toFixed?.(0)}</td><td>${r.dir ?? '—'}</td><td>${r.rh ?? '—'}</td><td>${r.pop ?? '—'}</td>`;
       tbody.appendChild(tr);
     });
 
@@ -427,7 +427,7 @@
     const nowT = c.temperature_2m ?? rows[0]?.temp; 
     const nowW = c.wind_speed_10m ?? rows[0]?.wind;
     const bft = beaufortFromKmh(nowW||0);
-    el('quickRead').textContent = Temp ${Number(nowT).toFixed(1)}°C • Wind ${Number(nowW).toFixed(0)} km/h (Bft ${bft.scale}: ${bft.name}) • UV max ${daily.uv_index_max?.[0] ?? '—'};
+    el('quickRead').textContent = `Temp ${Number(nowT).toFixed(1)}°C • Wind ${Number(nowW).toFixed(0)} km/h (Bft ${bft.scale}: ${bft.name}) • UV max ${daily.uv_index_max?.[0] ?? '—'}`;
   }
 
   function beaufortFromKmh(kmh){
@@ -451,7 +451,7 @@
 
     const next12 = rows.slice(0,12);
     next12.forEach(r=>{
-      const tr=document.createElement('tr'); tr.innerHTML = <td>${fmtTime(r.t)}</td><td>${r.hs?.toFixed?.(2)}</td><td>${r.tp?.toFixed?.(1)}</td><td>${r.dir?.toFixed?.(0)}</td>; tbody.appendChild(tr);
+      const tr=document.createElement('tr'); tr.innerHTML = `<td>${fmtTime(r.t)}</td><td>${r.hs?.toFixed?.(2)}</td><td>${r.tp?.toFixed?.(1)}</td><td>${r.dir?.toFixed?.(0)}</td>`; tbody.appendChild(tr);
     });
 
     // Chart: Hs & Period (24h)
@@ -479,7 +479,7 @@
       br.innerHTML = '';
       rows.slice(0,12).forEach(r=>{
         const tr=document.createElement('tr');
-        tr.innerHTML = <td>${fmtTime(r.t)}</td><td>${r.sh ?? '—'}</td><td>${r.st ?? '—'}</td><td>${r.wh ?? '—'}</td><td>${r.wt ?? '—'}</td>;
+        tr.innerHTML = `<td>${fmtTime(r.t)}</td><td>${r.sh ?? '—'}</td><td>${r.st ?? '—'}</td><td>${r.wh ?? '—'}</td><td>${r.wt ?? '—'}</td>`;
         br.appendChild(tr);
       });
     }
@@ -488,7 +488,7 @@
   function renderTides(data){
     const tbody = el('tideTable').querySelector('tbody'); tbody.innerHTML='';
     (data.extremes||[]).forEach(x=>{
-      const tr=document.createElement('tr'); tr.innerHTML = <td>${fmtDateTime(x.dt*1000)}</td><td>${x.type}</td><td>${(x.height??0).toFixed(2)}</td>; tbody.appendChild(tr);
+      const tr=document.createElement('tr'); tr.innerHTML = `<td>${fmtDateTime(x.dt*1000)}</td><td>${x.type}</td><td>${(x.height??0).toFixed(2)}</td>`; tbody.appendChild(tr);
     });
   }
 
@@ -496,7 +496,7 @@
   async function updateAll(){
     updateNow();
     const {lat,lon} = currentLoc();
-    el('locName').textContent = el('location').value; el('locCoords').textContent = ${lat.toFixed(4)}, ${lon.toFixed(4)}  (${TZ});
+    el('locName').textContent = el('location').value; el('locCoords').textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}  (${TZ})`;
 
     const results = await Promise.allSettled([
       getSolunar(lat,lon,toISODate(new Date())),
@@ -531,7 +531,7 @@
           moonIllumination: (sol.moonIllumination ?? sol.moonPhasePct)/100,
           moonPhaseIndex: sol.moonPhaseIndex,
           moonPhase: sol.moonPhase,
-          dayRating: sol.dayRating? ${sol.dayRating}/4 : ''
+          dayRating: sol.dayRating ? `${sol.dayRating}/4` : ''
         });
       }catch(err){ console.warn('Solunar render failed', err); }
     } else {
@@ -548,9 +548,9 @@
 
     // Diagnostics
     const diag=[];
-    function line(name,res){ if(!res) return diag.push(${name}: no result);
-      if(res.status!=='fulfilled') return diag.push(${name}: FAIL → ${String(res.reason)});
-      return diag.push(${name}: ok (bytes ~${JSON.stringify(res.value).length}));
+    function line(name,res){ if(!res) return diag.push(`${name}: no result`);
+      if(res.status!=='fulfilled') return diag.push(`${name}: FAIL → ${String(res.reason)}`);
+      return diag.push(`${name}: ok (bytes ~${JSON.stringify(res.value).length})`);
     }
     line('Weather', wxRes); line('Marine', marRes); line('Solunar', solRes);
     console.log('[PLFC diag]', diag.join(' • '));
