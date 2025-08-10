@@ -238,6 +238,7 @@ const el=(id)=>document.getElementById(id);
 const fmtTime=(d)=>new Date(d).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
 const fmtDateTime=(d)=>new Date(d).toLocaleString([], {hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"});
 const toISODate=(d)=>new Date(d).toISOString().slice(0,10);
+const toSolunarDate=d=>{const dt=new Date(d);const y=dt.getFullYear();const m=String(dt.getMonth()+1).padStart(2,'0');const day=String(dt.getDate()).padStart(2,'0');return `${y}${m}${day}`;};
 const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
 const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
 const load=(k,fb)=>{try{return JSON.parse(localStorage.getItem(k))??fb;}catch{return fb;}};
@@ -460,7 +461,7 @@ async function updateAll(){
   const {lat,lon}=currentLoc();
   el('locName').textContent=el('location').value; el('locCoords').textContent=`${lat.toFixed(4)}, ${lon.toFixed(4)}  (${TZ})`;
 
-  const results=await Promise.allSettled([ getSolunar(lat,lon,toISODate(new Date())), getWeather(lat,lon), getMarine(lat,lon) ]);
+  const results=await Promise.allSettled([ getSolunar(lat,lon,toSolunarDate(new Date())), getWeather(lat,lon), getMarine(lat,lon) ]);
   const [solRes,wxRes,marRes]=results;
 
   if(wxRes.status==='fulfilled'){ try{renderWeather(wxRes.value);}catch(e){console.error('Render weather failed',e);} }
