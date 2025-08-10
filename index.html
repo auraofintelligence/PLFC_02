@@ -44,7 +44,16 @@
     .small{font-size:13px}
     .notice{border-left:3px solid var(--accent); padding-left:10px; color:var(--muted)}
     a{color:#7bb6ff}
-    .card canvas { display:block; width:100%; height:180px !important; max-height:220px; }
+    .card canvas { display:block; width:100%; height:auto; aspect-ratio: 16/6; max-height:220px; }
+    .card canvas.is-empty { display:none; }
+    
+    /* Hide helper */
+    .hide { display:none !important; }
+    
+    /* When a card is the only one on its row, let it span 2 cols (desktop) */
+    @media (min-width:901px){
+      .span-2 { grid-column: span 2; }
+    }
     /* Landing layout: Map tall at left, Solunar top-right, Waves under Solunar */
 .landing{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}
 .map-card{grid-row:span 2}                 /* make the map column tall */
@@ -82,7 +91,7 @@
     <!-- Landing grid: Map (tall left), Solunar (top-right), Waves (under Solunar) -->
     <div class="landing" style="margin-top:0">
       <!-- Map -->
-      <section class="card map-card">
+      <section class="card map-card" id="card-map">
         <div class="section-title">
           <h2>Google My Maps</h2>
           <div class="map-toggle small">Layer:
@@ -102,7 +111,7 @@
       </section>
 
       <!-- Solunar -->
-      <section class="card">
+      <section class="card" id="card-solunar">
         <div class="section-title"><h2>Solunar Bite Windows</h2><span class="pill" id="moon-phase-pill">—</span></div>
         <div id="solunar">
           <div class="row-4">
@@ -142,7 +151,7 @@
       </section>
 
       <!-- Waves — Swell vs Wind-wave -->
-      <section class="card">
+      <section class="card" id="card-wavebreak">
         <div class="section-title"><h2>Waves — Swell vs Wind-wave</h2><span class="pill">24h</span></div>
         <canvas id="waveBreakChart" height="120"></canvas>
         <table id="marineBreakTable" style="margin-top:8px">
@@ -152,8 +161,8 @@
       </section>
     </div>
 
-    <div class="row" style="margin-top:16px">
-      <section class="card">
+    <div class="row" id="row-wx-marine" style="margin-top:16px">
+      <section class="card" id="card-weather">
         <div class="section-title"><h2>Weather & Wind (Open‑Meteo)</h2><span class="pill" id="updated-weather">—</span></div>
         <canvas id="wxChart" height="120"></canvas>
         <table id="wxTable" style="margin-top:8px">
@@ -162,7 +171,7 @@
         </table>
       </section>
 
-      <section class="card">
+      <section class="card" id="card-marine">
         <div class="section-title"><h2>Waves (Marine)</h2><span class="pill" id="updated-marine">—</span></div>
         <canvas id="waveChart" height="120"></canvas>
         <table id="marineTable" style="margin-top:8px">
@@ -171,7 +180,7 @@
         </table>
       </section>
 
-      <section class="card">
+      <section class="card" id="card-now">
         <div class="section-title"><h2>Now</h2><span class="pill" id="now-local">—</span></div>
         <div class="grid">
           <div>
@@ -187,8 +196,8 @@
       </section>
     </div>
 
-    <div class="row-3" style="margin-top:16px">
-      <section class="card">
+    <div class="row-3" id="row-tides-precip" style="margin-top:16px">
+      <section class="card" id="card-tides">
         <div class="section-title"><h2>Tides (WorldTides)</h2><span class="pill" id="updated-tides">Requires API key</span></div>
         <div class="flex">
           <input id="worldtidesKey" placeholder="WorldTides API Key (saved locally)" class="grow" />
@@ -201,7 +210,7 @@
         <div class="small muted">Tip: get a key at worldtides.info (global predictions). Key is stored in your browser only.</div>
       </section>
 
-      <section class="card" style="grid-column: span 2">
+      <section class="card" id="card-precip" style="grid-column: span 2">
         <div class="section-title"><h2>Precipitation Nowcast (15‑min)</h2><span class="pill" id="updated-precip">—</span></div>
         <canvas id="precip15Chart" height="120"></canvas>
       </section>
@@ -259,6 +268,27 @@ const toSolunarDate=d=>{const dt=new Date(d);const y=dt.getFullYear();const m=St
 const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
 const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
 const load=(k,fb)=>{try{return JSON.parse(localStorage.getItem(k))??fb;}catch{return fb;}};
+
+// ====== CARD MANAGEMENT HELPERS ======
+function showCard(id, on){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.classList.toggle('hide', !on);
+}
+
+function markCanvasEmpty(canvas, empty){
+  if(!canvas) return;
+  canvas.classList.toggle('is-empty', !!empty);
+}
+
+function spanIfSolo(rowSelector){
+  // If only one visible card in a "row" container, let it span two columns
+  const row = document.querySelector(rowSelector);
+  if(!row) return;
+  const cards = [...row.querySelectorAll('.card')].filter(c=>!c.classList.contains('hide'));
+  row.querySelectorAll('.card').forEach(c=>c.classList.remove('span-2'));
+  if(cards.length === 1) cards[0].classList.add('span-2');
+}
 
 // ====== INIT UI ======
 (function initUI(){
@@ -327,7 +357,36 @@ async function getSolunar(lat, lon, dateISO){
 }
 
 async function getWeather(lat, lon){
-  const base = {
+  // 1) Try BOM first (Australia-friendly)
+  const bom = new URL('https://api.open-meteo.com/v1/bom');
+  bom.search = new URLSearchParams({
+    latitude: lat, longitude: lon, timezone: TZ || 'auto',
+    forecast_days: 3,
+    temperature_unit: 'celsius',
+    wind_speed_unit: 'kmh',
+    precipitation_unit: 'mm',
+    // NOTE: BOM returns 'precipitation' (mm), not precipitation_probability
+    hourly: [
+      'temperature_2m',
+      'relative_humidity_2m',
+      'wind_speed_10m','wind_gusts_10m','wind_direction_10m',
+      'precipitation'
+    ].join(','),
+    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
+  }).toString();
+
+  try{
+    const d = await fetchJSON(bom);
+    if (d?.hourly?.time?.length) { 
+      d.__source = 'BOM'; 
+      console.log('[WX URL] BOM', bom.toString());
+      return d; 
+    }
+  }catch(e){ /* try forecast next */ }
+
+  // 2) Fallback to general Forecast API
+  const fc = new URL('https://api.open-meteo.com/v1/forecast');
+  fc.search = new URLSearchParams({
     latitude: lat, longitude: lon, timezone: TZ || 'auto',
     forecast_days: 3,
     temperature_unit: 'celsius',
@@ -335,27 +394,19 @@ async function getWeather(lat, lon){
     precipitation_unit: 'mm',
     hourly: [
       'temperature_2m',
-      'wind_speed_10m','wind_gusts_10m','wind_direction_10m',
       'relative_humidity_2m',
+      'wind_speed_10m','wind_gusts_10m','wind_direction_10m',
       'precipitation_probability'
     ].join(','),
-    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
-  };
+    daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(','),
+    // minutely_15 is only available in certain regions; OK if it returns empty
+    minutely_15: 'precipitation'
+  }).toString();
 
-  // Try with minutely_15 first
-  const withNowcast = new URL('https://api.open-meteo.com/v1/forecast');
-  withNowcast.search = new URLSearchParams({ ...base, minutely_15: 'precipitation' }).toString();
-  console.log('[WX URL try1]', withNowcast.toString());
-
-  try {
-    return await fetchJSON(withNowcast);
-  } catch (e) {
-    console.warn('[WX] minutely_15 not available here — retrying without it', e);
-    const fallback = new URL('https://api.open-meteo.com/v1/forecast');
-    fallback.search = new URLSearchParams(base).toString();
-    console.log('[WX URL try2]', fallback.toString());
-    return fetchJSON(fallback);
-  }
+  console.log('[WX URL] FORECAST', fc.toString());
+  const d2 = await fetchJSON(fc);
+  d2.__source = 'FORECAST';
+  return d2;
 }
 
 
@@ -377,7 +428,12 @@ async function getMarine(lat,lon){
 
 async function getTides(lat,lon){
   const key=el('worldtidesKey').value.trim();
-  if(!key){ el('updated-tides').textContent='Add API key to show tides'; return {extremes:[]}; }
+  if(!key){ 
+    showCard('card-tides', false);
+    spanIfSolo('#row-tides-precip');
+    return {extremes:[]}; 
+  }
+  showCard('card-tides', true);
   const url=new URL('https://www.worldtides.info/api');
   url.search=new URLSearchParams({extremes:'',lat,lon,key,length:48*3600}).toString();
   const data=await fetchJSON(url);
@@ -427,19 +483,35 @@ function renderWeather(data){
   console.log('[WX Render] Data type:', typeof data);
   console.log('[WX Render] Data keys:', Object.keys(data || {}));
   
+  // API error? Hide the card
+  if (data?.error || data?.reason) {
+    showCard('card-weather', false);
+    spanIfSolo('#row-wx-marine');
+    return;
+  }
+  
   const h = data?.hourly;
   console.log('[WX Render] Hourly object:', h);
   console.log('[WX Render] Hourly keys:', Object.keys(h || {}));
+  console.log('[WX Render] Data source:', data.__source || 'unknown');
   
   if(!h || !Array.isArray(h.time) || !h.time.length){
-    el('updated-weather').textContent = 'No weather data received';
-    console.warn('[WX] Missing hourly data', data);
+    showCard('card-weather', false);
+    spanIfSolo('#row-wx-marine');
     return;
   }
+  
+  showCard('card-weather', true);
   console.log('[WX Render] Hourly data found:', h.time.length, 'entries');
   console.log('[WX Render] First few time entries:', h.time.slice(0, 3));
   console.log('[WX Render] Temperature data length:', (h.temperature_2m || []).length);
   console.log('[WX Render] Wind data length:', (h.wind_speed_10m || []).length);
+  
+  // Smart rain handling: use % if precipitation_probability exists, else use precipitation in mm
+  const hasProb = Array.isArray(h?.precipitation_probability);
+  const hasMm   = Array.isArray(h?.precipitation);
+  const rainHdr = document.querySelector('#wxTable thead th:last-child');
+  if (rainHdr) rainHdr.textContent = hasProb ? 'Rain %' : (hasMm ? 'Rain (mm)' : 'Rain');
   
   const d = data.daily || {};
   el('updated-weather').textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -464,15 +536,22 @@ function renderWeather(data){
     temp: (h.temperature_2m||[])[i],
     wind: (h.wind_speed_10m||[])[i],
     gust: (h.wind_gusts_10m||[])[i],
-    dir: (h.wind_direction_10m||[])[i],
-    rh: (h.relative_humidity_2m||[])[i],
-    pop: (h.precipitation_probability||[])[i]
+    dir:  (h.wind_direction_10m||[])[i],
+    rh:   (h.relative_humidity_2m||[])[i],
+    pop:  (h.precipitation_probability||[])[i], // %
+    rain: (h.precipitation||[])[i]              // mm
   }));
 
   // table (next 12 hours)
   const tbody = el('wxTable').querySelector('tbody'); tbody.innerHTML = '';
   rows.slice(0,12).forEach(r=>{
     const tr = document.createElement('tr');
+    
+    // Smart rain cell: use % if precipitation_probability exists, else use precipitation in mm
+    const rainCell = hasProb
+      ? (r.pop ?? '—')
+      : (hasMm ? (r.rain?.toFixed?.(1) ?? '—') : '—');
+    
     tr.innerHTML =
       `<td>${fmtTime(r.t)}</td>`+
       `<td>${(r.temp??'—')=== '—' ? '—' : Number(r.temp).toFixed(1)}</td>`+
@@ -480,7 +559,7 @@ function renderWeather(data){
       `<td>${r.gust?.toFixed?.(0) ?? '—'}</td>`+
       `<td>${r.dir ?? '—'}</td>`+
       `<td>${r.rh  ?? '—'}</td>`+
-      `<td>${r.pop ?? '—'}</td>`;
+      `<td>${rainCell}</td>`;
     tbody.appendChild(tr);
   });
 
@@ -509,45 +588,41 @@ function renderWeather(data){
   el('quickRead').textContent =
     `Temp ${Number(nowT).toFixed(1)}°C • Wind ${Number(nowW).toFixed(0)} km/h (Bft ${bft.scale}: ${bft.name}) • UV max ${d.uv_index_max?.[0] ?? '—'}`;
 
-  // 15-min precip mini-chart (if available)
-  const pTimes = data.minutely_15?.time || [], pVals = data.minutely_15?.precipitation || [];
-  if (pTimes.length){
+  // Precipitation chart using hourly data
+  const hh = data.hourly || {};
+  const precipLabels = (hh.time || []).slice(0,8).map(t => new Date(t).toLocaleTimeString([], {hour:'2-digit'}));
+  const precipVals = (hh.precipitation || []).slice(0,8);
+  const rainPct = (hh.precipitation_probability || []).slice(0,8);
+  
+  if (precipLabels.length && (precipVals.length || rainPct.length)) {
+    showCard('card-precip', true);
+    markCanvasEmpty(document.getElementById('precip15Chart'), false);
+    
     if (precipChart) { try{precipChart.destroy()}catch{} }
+    
+    // Use actual precipitation if available, otherwise fall back to probability
+    const chartData = precipVals.length ? precipVals : rainPct;
+    const chartLabel = precipVals.length ? 'Precip mm (hourly)' : 'Rain % (hourly)';
+    const yAxis = precipVals.length ? { beginAtZero: true } : { beginAtZero: true, max: 100 };
+    
     precipChart = new Chart(document.getElementById('precip15Chart'),{
       type:'bar',
-      data:{ labels: pTimes.slice(0,8).map(t=>new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})),
-             datasets:[{ label:'Precip mm (15 min)', data: pVals.slice(0,8) }] },
-      options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true } } }
+      data:{ labels: precipLabels, datasets:[{ label: chartLabel, data: chartData }] },
+      options:{ responsive:true, maintainAspectRatio:false, scales:{ y: yAxis } }
     });
-    el('updated-precip').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    el('updated-precip').textContent = precipVals.length ? 'Hourly precipitation' : 'Rain probability';
   } else {
-    // fallback: show next 8 hours of rain probability as a bar chart
-    const hh = data.hourly || {}; // NOTE: user suggested changing this to `hh` to avoid shadowing
-    const labels = (hh.time || []).slice(0,8).map(t => new Date(t).toLocaleTimeString([], {hour:'2-digit'}));
-    const rainPct = (hh.precipitation_probability || []).slice(0,8);
-    
-    if (labels.length && rainPct.length) {
-      if (precipChart) { try{precipChart.destroy()}catch{} }
-      precipChart = new Chart(document.getElementById('precip15Chart'),{
-        type:'bar',
-        data:{ labels, datasets:[{ label:'Rain % (hourly)', data: rainPct }] },
-        options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } } }
-      });
-      el('updated-precip').textContent = 'Hourly fallback';
-    } else {
-      el('updated-precip').textContent = 'No nowcast available for this spot/time.';
-      const canvas = document.getElementById('precip15Chart');
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        const muted = getComputedStyle(document.documentElement).getPropertyValue('--muted') || '#93a1bd';
-        ctx.fillStyle = muted.trim();
-        ctx.font = '14px system-ui';
-        ctx.textAlign = 'center';
-        ctx.fillText('15-min precipitation data', canvas.width/2, canvas.height/2 - 10);
-        ctx.fillText('not available from API', canvas.width/2, canvas.height/2 + 10);
-      }
-    }
+    // no precipitation series: hide card entirely
+    showCard('card-precip', false);
   }
+  
+  // If for some reason the first 24 rows are undefined, hide chart
+  const wxCanvas = document.getElementById('wxChart');
+  const hasWxData = (h.temperature_2m?.length || 0) && (h.wind_speed_10m?.length || 0);
+  markCanvasEmpty(wxCanvas, !hasWxData);
+  
+  spanIfSolo('#row-wx-marine');
+  spanIfSolo('#row-tides-precip');
 }
 function beaufortFromKmh(kmh){
   const b=[1,5,11,19,28,38,49,61,74,88,102,117,1000];
@@ -555,7 +630,12 @@ function beaufortFromKmh(kmh){
   let i=b.findIndex(x=>kmh<=x); if(i<0) i=b.length-1; return {scale:i,name:n[i]};
 }
 function renderMarine(data){
-  if(!data?.hourly?.time?.length) return;
+  if(!data?.hourly?.time?.length){
+    showCard('card-marine', false);
+    spanIfSolo('#row-wx-marine');
+    return;
+  }
+  showCard('card-marine', true);
   const {hourly}=data;
   el('updated-marine').textContent='Updated '+new Date().toLocaleTimeString();
 
@@ -571,17 +651,38 @@ function renderMarine(data){
   });
 
   if(waveBreakChart){try{waveBreakChart.destroy()}catch{}}
-  waveBreakChart=new Chart(document.getElementById('waveBreakChart'),{
-    type:'line', data:{labels,datasets:[{label:'Swell m',data:rows.slice(0,24).map(r=>r.sh)},{label:'Wind-wave m',data:rows.slice(0,24).map(r=>r.wh)}]},
-    options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,title:{display:true,text:'m'}}}}
-  });
+  
+  // Check if we have swell/wind-wave data to show
+  const hasSwellData = rows.some(r => r.sh !== undefined && r.sh !== null);
+  const hasWindWaveData = rows.some(r => r.wh !== undefined && r.wh !== null);
+  
+  if (hasSwellData || hasWindWaveData) {
+    showCard('card-wavebreak', true);
+    markCanvasEmpty(document.getElementById('waveBreakChart'), false);
+    
+    waveBreakChart=new Chart(document.getElementById('waveBreakChart'),{
+      type:'line', data:{labels,datasets:[{label:'Swell m',data:rows.slice(0,24).map(r=>r.sh)},{label:'Wind-wave m',data:rows.slice(0,24).map(r=>r.wh)}]},
+      options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,title:{display:true,text:'m'}}}}
+    });
 
-  const br=document.querySelector('#marineBreakTable tbody'); br.innerHTML='';
-  rows.slice(0,12).forEach(r=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${fmtTime(r.t)}</td><td>${r.sh??'—'}</td><td>${r.st??'—'}</td><td>${r.wh??'—'}</td><td>${r.wt??'—'}</td>`; br.appendChild(tr);});
+    const br=document.querySelector('#marineBreakTable tbody'); br.innerHTML='';
+    rows.slice(0,12).forEach(r=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${fmtTime(r.t)}</td><td>${r.sh??'—'}</td><td>${r.wt??'—'}</td>`; br.appendChild(tr);});
+  } else {
+    showCard('card-wavebreak', false);
+  }
+  
+  // Mark canvas as populated
+  const waveCanvas = document.getElementById('waveChart');
+  markCanvasEmpty(waveCanvas, false);
+  
+  spanIfSolo('#row-wx-marine');
+  spanIfSolo('.landing');
 }
 function renderTides(data){
   const tbody=el('tideTable').querySelector('tbody'); tbody.innerHTML='';
   (data.extremes||[]).forEach(x=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${fmtDateTime(x.dt*1000)}</td><td>${x.type}</td><td>${(x.height??0).toFixed(2)}</td>`; tbody.appendChild(tr);});
+  
+  spanIfSolo('#row-tides-precip');
 }
 
 // ====== ORCHESTRATION ======
