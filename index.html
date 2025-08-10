@@ -79,45 +79,28 @@
 
   <main class="wrap" id="app">
     <!-- Landing grid: Map (tall left), Solunar (top-right), Waves (under Solunar) -->
-<div class="landing" style="margin-top:0">
-  <!-- Map -->
-  <section class="card map-card">
-    <div class="section-title">
-      <h2>Google My Maps</h2>
-      <div class="map-toggle small">Layer:
-        <button class="pill" data-map-layer="all">All</button>
-        <button class="pill" data-map-layer="point-lookout">Point Lookout</button>
-        <button class="pill" data-map-layer="amity">Amity</button>
-        <button class="pill" data-map-layer="dunwich">Dunwich</button>
-        <button class="pill" data-map-layer="jumpinpin">Jumpinpin</button>
-      </div>
-    </div>
-    <div class="notice small">This iframe uses a My-Maps <em>mid</em>…</div>
-    <div class="map-frame">  <!-- was a div with aspect-ratio -->
-      <iframe id="mymaps" title="PLFC Spots" allowfullscreen
-        src="https://www.google.com/maps/d/embed?mid=1pZdqmQfqAUfK53FadLULB_5mQ0qC0iY&ehbc=2E312F&ll=-27.4310,153.5470&z=11">
-      </iframe>
-    </div>
-  </section>
+    <div class="landing" style="margin-top:0">
+      <!-- Map -->
+      <section class="card map-card">
+        <div class="section-title">
+          <h2>Google My Maps</h2>
+          <div class="map-toggle small">Layer:
+            <button class="pill" data-map-layer="all">All</button>
+            <button class="pill" data-map-layer="point-lookout">Point Lookout</button>
+            <button class="pill" data-map-layer="amity">Amity</button>
+            <button class="pill" data-map-layer="dunwich">Dunwich</button>
+            <button class="pill" data-map-layer="jumpinpin">Jumpinpin</button>
+          </div>
+        </div>
+        <div class="notice small">This iframe uses a My-Maps <em>mid</em>…</div>
+        <div class="map-frame">
+          <iframe id="mymaps" title="PLFC Spots" allowfullscreen
+            src="https://www.google.com/maps/d/embed?mid=1pZdqmQfqAUfK53FadLULB_5mQ0qC0iY&ehbc=2E312F&ll=-27.4310,153.5470&z=11">
+          </iframe>
+        </div>
+      </section>
 
-  <!-- Solunar -->
-  <section class="card">
-    <div class="section-title"><h2>Solunar Bite Windows</h2><span class="pill" id="moon-phase-pill">—</span></div>
-    <!-- keep your existing Solunar markup -->
-    <div id="solunar">…</div>
-  </section>
-
-  <!-- Waves — Swell vs Wind-wave (moves to right column, under Solunar) -->
-  <section class="card">
-    <div class="section-title"><h2>Waves — Swell vs Wind-wave</h2><span class="pill">24h</span></div>
-    <canvas id="waveBreakChart" height="120"></canvas>
-    <table id="marineBreakTable" style="margin-top:8px">
-      <thead>…</thead><tbody></tbody>
-    </table>
-  </section>
-</div>
-
-
+      <!-- Solunar -->
       <section class="card">
         <div class="section-title"><h2>Solunar Bite Windows</h2><span class="pill" id="moon-phase-pill">—</span></div>
         <div id="solunar">
@@ -156,11 +139,10 @@
           <div class="small muted" id="solunar-note" style="margin-top:8px"></div>
         </div>
       </section>
-    </div>
 
-    <div class="row" style="margin-top:16px">
+      <!-- Waves — Swell vs Wind-wave -->
       <section class="card">
-        <div class="section-title"><h2>Waves — Swell vs Wind‑wave</h2><span class="pill">24h</span></div>
+        <div class="section-title"><h2>Waves — Swell vs Wind-wave</h2><span class="pill">24h</span></div>
         <canvas id="waveBreakChart" height="120"></canvas>
         <table id="marineBreakTable" style="margin-top:8px">
           <thead><tr><th>Time</th><th>Swell H (m)</th><th>Swell T (s)</th><th>Wind‑wave H (m)</th><th>Wind‑wave T (s)</th></tr></thead>
