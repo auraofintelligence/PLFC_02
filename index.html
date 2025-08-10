@@ -14,12 +14,12 @@
     body{margin:0;font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu; background:var(--bg); color:var(--text)}
     header{position:sticky;top:0;z-index:10;background:linear-gradient(180deg, rgba(11,18,32,.98), rgba(11,18,32,.7));backdrop-filter:saturate(1.2) blur(8px);}    
     .wrap{max-width:1200px;margin:0 auto;padding:16px}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:16px;grid-auto-flow:dense;align-items:start}
-.row-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;grid-auto-flow:dense;align-items:start}
+    .row{display:grid;grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));gap:16px;grid-auto-flow:dense;align-items:start}
+.row-3{display:grid;grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));gap:16px;grid-auto-flow:dense;align-items:start}
 .landing{grid-auto-flow:dense;align-items:start}
     .row-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
     @media (max-width:900px){.row,.row-3,.row-4{grid-template-columns:1fr}}
-    .card{background:var(--card);border:1px solid var(--border);border-radius:16px; padding:14px; box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:16px; padding:14px; box-shadow:0 10px 30px rgba(0,0,0,.25); height: 100%}
     h1{font-size:20px;margin:0 0 6px}
     h2{font-size:16px;margin:0 0 8px;color:var(--muted)}
     h3{font-size:14px;margin:0 0 6px;color:var(--muted)}
@@ -333,16 +333,12 @@ function centerToLayer(layer){
 
 // ====== FETCHERS ======
 async function fetchJSON(url){ 
-  console.log('[FETCH] Requesting:', url);
   try {
     const r = await fetch(url); 
-    console.log('[FETCH] Response status:', r.status, r.statusText);
     if(!r.ok) throw new Error('HTTP '+r.status); 
     const data = await r.json();
-    console.log('[FETCH] Response data keys:', Object.keys(data || {}));
     return data;
   } catch (error) {
-    console.error('[FETCH] Error fetching:', url, error);
     throw error;
   }
 }
@@ -370,44 +366,32 @@ async function getSolunar(lat, lon, dateISO){
 }
 
 async function getWeather(lat, lon){
-  console.log('[WX] Fetching weather for:', lat, lon);
-  
-  // 1) Try BOM first (Australia-friendly)
-  const bom = new URL('https://api.open-meteo.com/v1/bom');
-  bom.search = new URLSearchParams({
-    latitude: lat, longitude: lon, timezone: TZ || 'auto',
+  const tz = TZ || 'auto';
+
+  // 1) BOM (ACCESS-G)
+  const bom = `https://api.open-meteo.com/v1/bom?` + new URLSearchParams({
+    latitude: lat, longitude: lon, timezone: tz,
     forecast_days: 3,
     temperature_unit: 'celsius',
     wind_speed_unit: 'kmh',
     precipitation_unit: 'mm',
-    // NOTE: BOM returns 'precipitation' (mm), not precipitation_probability
     hourly: [
       'temperature_2m',
       'relative_humidity_2m',
       'wind_speed_10m','wind_gusts_10m','wind_direction_10m',
-      'precipitation'
+      'precipitation'                 // <-- mm, not probability
     ].join(','),
     daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(',')
   }).toString();
 
-  try{
-    console.log('[WX] Trying BOM API...');
+  try {
     const d = await fetchJSON(bom);
-    console.log('[WX] BOM response:', d);
-    if (d?.hourly?.time?.length) { 
-      d.__source = 'BOM'; 
-      console.log('[WX] BOM success, returning data');
-      return d; 
-    }
-    console.log('[WX] BOM data incomplete, trying forecast API');
-  }catch(e){ 
-    console.log('[WX] BOM API failed:', e);
-  }
+    if (!d.error && d?.hourly?.time?.length) { d.__source = 'BOM'; return d; }
+  } catch (e) { /* fall through */ }
 
-  // 2) Fallback to general Forecast API
-  const fc = new URL('https://api.open-meteo.com/v1/forecast');
-  fc.search = new URLSearchParams({
-    latitude: lat, longitude: lon, timezone: TZ || 'auto',
+  // 2) Fallback: generic forecast (has precipitation_probability)
+  const fc = `https://api.open-meteo.com/v1/forecast?` + new URLSearchParams({
+    latitude: lat, longitude: lon, timezone: tz,
     forecast_days: 3,
     temperature_unit: 'celsius',
     wind_speed_unit: 'kmh',
@@ -419,14 +403,10 @@ async function getWeather(lat, lon){
       'precipitation_probability'
     ].join(','),
     daily: ['sunrise','sunset','uv_index_max','moon_phase'].join(','),
-    // minutely_15 is only available in certain regions; OK if it returns empty
     minutely_15: 'precipitation'
   }).toString();
 
-  console.log('[WX] Trying Forecast API...');
-  console.log('[WX] Forecast URL:', fc.toString());
   const d2 = await fetchJSON(fc);
-  console.log('[WX] Forecast response:', d2);
   d2.__source = 'FORECAST';
   return d2;
 }
@@ -501,35 +481,22 @@ function renderSolunar(data){
   el('solunar-note').textContent=`Solunar: ${data.dayRating||''} • Moon: ${phaseName(data.moonPhaseIndex??data.moonPhase)} (${(illum||0).toFixed(0)}% illuminated)`;
 }
 function renderWeather(data){
-  console.log('[WX Render] Starting with data:', data);
-  console.log('[WX Render] Data type:', typeof data);
-  console.log('[WX Render] Data keys:', Object.keys(data || {}));
-  
   // API error? Hide the card
   if (data?.error || data?.reason) {
-    console.log('[WX Render] API error detected, hiding weather card');
     showCard('card-weather', false);
     spanIfSolo('#row-wx-marine');
     return;
   }
   
   const h = data?.hourly;
-  console.log('[WX Render] Hourly object:', h);
-  console.log('[WX Render] Hourly keys:', Object.keys(h || {}));
-  console.log('[WX Render] Data source:', data.__source || 'unknown');
   
   if(!h || !Array.isArray(h.time) || !h.time.length){
-    console.log('[WX Render] No hourly data, hiding weather card');
     showCard('card-weather', false);
     spanIfSolo('#row-wx-marine');
     return;
   }
   
   showCard('card-weather', true);
-  console.log('[WX Render] Hourly data found:', h.time.length, 'entries');
-  console.log('[WX Render] First few time entries:', h.time.slice(0, 3));
-  console.log('[WX Render] Temperature data length:', (h.temperature_2m || []).length);
-  console.log('[WX Render] Wind data length:', (h.wind_speed_10m || []).length);
   
   // Smart rain handling: use % if precipitation_probability exists, else use precipitation in mm
   const hasProb = Array.isArray(h?.precipitation_probability);
@@ -547,11 +514,8 @@ function renderWeather(data){
     (h.wind_speed_10m||[]).length
   ) || 0;
   
-  console.log('[WX Render] Calculated usable rows:', n);
-  
   if (!n){
     el('updated-weather').textContent = 'No usable hourly rows';
-    console.warn('[WX] Series present but empty lengths', h);
     return;
   }
   
@@ -781,13 +745,6 @@ function scheduleAutoRefresh(){ if(refreshTimer) clearInterval(refreshTimer); re
 
   // Kick it off
   updateAll(); scheduleAutoRefresh(); setInterval(updateNow,1000);
-  
-  // Test weather API directly
-  console.log('[TEST] Testing weather API endpoints...');
-  fetch('https://api.open-meteo.com/v1/forecast?latitude=-27.4310&longitude=153.5347&hourly=temperature_2m&forecast_days=1')
-    .then(r => r.json())
-    .then(d => console.log('[TEST] Direct forecast test:', d))
-    .catch(e => console.error('[TEST] Direct forecast test failed:', e));
 </script>
 
 </body>
